@@ -38,7 +38,15 @@ export function ProfileScreen() {
                 <div style={s.heroName}>{h.name}</div>
                 <div style={s.heroClass}>{tmpl?.label ?? h.class} · Lv {h.level} · XP {h.xp}</div>
               </div>
-              <div style={s.heroStatus}>{h.isAlive ? '✅' : '💀'}</div>
+              <div style={{ textAlign: 'center' }}>
+                <img
+                  src={`${import.meta.env.BASE_URL}heroes/${h.class}.png`}
+                  alt={h.class}
+                  style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, display: 'block', marginBottom: 2 }}
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+                <div style={s.heroStatus}>{h.isAlive ? '✅' : '💀'}</div>
+              </div>
             </div>
             <div style={s.heroAbility}>
               <span style={s.abilityLabel}>Ability: </span>

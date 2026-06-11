@@ -46,6 +46,14 @@ function HeroCard({ hero, selected, onToggle }: { hero: HeroDTO; selected: boole
   const hpPercent = Math.round((hero.stats.hp / hero.stats.maxHp) * 100);
   return (
     <div style={{ ...s.card, borderColor: selected ? '#7b5ea7' : '#2a2a40', background: selected ? '#22163a' : '#1a1a2e' }} onClick={onToggle}>
+      <div style={s.portraitRow}>
+        <img
+          src={`${import.meta.env.BASE_URL}heroes/${hero.class}.png`}
+          alt={hero.class}
+          style={s.portrait}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        />
+      </div>
       <div style={s.cardRow}>
         <div>
           <div style={s.heroName}>{hero.name}</div>
@@ -83,4 +91,6 @@ const s: Record<string, React.CSSProperties> = {
   hpBarBg: { height: 4, background: '#2a2a40', borderRadius: 2 },
   hpBar: { height: 4, borderRadius: 2, transition: 'width 0.3s' },
   startBtn: { width: '100%', padding: '14px 0', background: '#5b3a9c', border: 'none', borderRadius: 12, color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer' },
+  portraitRow: { display: 'flex', justifyContent: 'center', marginBottom: 8 },
+  portrait: { width: 80, height: 80, objectFit: 'cover', borderRadius: 8 },
 };

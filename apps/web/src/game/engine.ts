@@ -184,23 +184,24 @@ class GameEngine {
   /** Loads (or creates) the save, reconciling local and cloud copies. */
   async init(): Promise<void> {
     if (this.ready) return;
-    const local = loadLocal();
-    const cloudMeta = await loadCloudMeta();
+    const rawLocal = loadLocal() as any;
+    const rawCloud = await loadCloudMeta() as any;
 
-    const localValid = local && local.version === SAVE_VERSION ? local : null;
-    const cloudValid = cloudMeta && cloudMeta.version === SAVE_VERSION ? cloudMeta : null;
+    if (rawLocal) migrateSave(rawLocal);
+    if (rawCloud) migrateSave(rawCloud);
 
-    if (localValid && cloudValid) {
-      // Last write wins on permanent progress. A newer cloud copy means the
-      // player progressed on another device, so any stale local run is dropped.
+    const local = rawLocal && rawLocal.version === SAVE_VERSION ? rawLocal as SaveState : null;
+    const cloud = rawCloud && rawCloud.version === SAVE_VERSION ? rawCloud as MetaSave : null;
+
+    if (local && cloud) {
       this.save =
-        cloudValid.updatedAt > localValid.updatedAt
-          ? { ...cloudValid, expedition: null, combat: null }
-          : localValid;
-    } else if (cloudValid) {
-      this.save = { ...cloudValid, expedition: null, combat: null };
-    } else if (localValid) {
-      this.save = localValid;
+        cloud.updatedAt > local.updatedAt
+          ? { ...cloud, expedition: null, combat: null }
+          : local;
+    } else if (cloud) {
+      this.save = { ...cloud, expedition: null, combat: null };
+    } else if (local) {
+      this.save = local;
     } else {
       this.save = createNewSave();
     }
@@ -254,7 +255,7 @@ class GameEngine {
 
   // --- Base ---
 
-  async upgradeBuilding(buildingType: string): Promise<{ building: BuildingDTO; resources: ResourceMap }> {
+  async upgradeBuilding(buildingType: string): Promise<{ building: BuildingDTO; resources: ResourceMap; heroes: HeroDTO[] }> {
     const config = BUILDING_CONFIGS[buildingType as keyof typeof BUILDING_CONFIGS];
     if (!config) throw new Error(`Unknown building type: ${buildingType}`);
 
@@ -275,9 +276,30 @@ class GameEngine {
 
     this.save.resources = subtractCost(this.save.resources, cost);
     building.level += 1;
+
+    // Barracks: unlock heroes for the new level.
+    if (buildingType === 'barracks') {
+      const pool = BARRACKS_UNLOCKS[building.level] ?? [];
+      const existingClasses = new Set(this.save.heroes.map((h) => h.class));
+      for (const { class: cls, name } of pool) {
+        if (!existingClasses.has(cls)) {
+          this.save.heroes.push({
+            id: newId('hero'),
+            name,
+            class: cls,
+            level: 1,
+            xp: 0,
+            hp: HERO_TEMPLATES[cls].baseStats.maxHp,
+            isAlive: true,
+          });
+        }
+      }
+    }
+
     await this.persist();
 
-    return { building: { ...building }, resources: { ...this.save.resources } };
+    const forge = this.bldLevel('forge');
+    return { building: { ...building }, resources: { ...this.save.resources }, heroes: this.save.heroes.map((h) => heroToDTO(h, forge)) };
   }
 
   // --- Expedition ---
@@ -369,6 +391,7 @@ class GameEngine {
         speed: stats.speed,
         isAlive: true,
         heroId: h.id,
+        heroClass: h.class,
       };
     });
 

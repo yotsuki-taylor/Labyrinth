@@ -90,6 +90,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       const result = await engine.upgradeBuilding(buildingType);
       set((s) => ({
         resources: result.resources,
+        heroes: result.heroes,
         buildings: s.buildings.map((b) =>
           b.type === buildingType ? result.building : b,
         ),
