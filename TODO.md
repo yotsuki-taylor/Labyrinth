@@ -6,7 +6,7 @@ This document tracks planned features and known gaps in the current foundation.
 
 ## 🔴 Critical (before any real testing)
 
-- [ ] **Telegram HMAC auth** — `apps/api/src/middleware/auth.ts` has a TODO for signature validation. Must be implemented before any public deployment.
+- [x] **Telegram HMAC auth** — `apps/api/src/middleware/auth.ts` now validates initData via HMAC-SHA256 (with auth_date freshness check) when `DEV_MODE=false`.
 - [ ] **Hero recovery** — Dead heroes have no recovery mechanic yet. Add a time-based or resource-based revival system.
 - [ ] **API input validation** — Add Zod schemas to all POST routes. Currently bodies are trusted as-is.
 - [ ] **Error handling** — Standardize error responses across all routes (`{ error, code, details }`).

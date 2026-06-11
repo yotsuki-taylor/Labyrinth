@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../lib/prisma.js';
 import { HERO_TEMPLATES } from '@labyrinth/shared';
@@ -22,7 +23,13 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
         return reply.status(401).send({ error: 'Missing Telegram initData' });
       }
 
-      const parsed = parseTelegramInitData(initData);
+      const botToken = process.env.TELEGRAM_BOT_TOKEN;
+      if (!botToken) {
+        request.log.error('TELEGRAM_BOT_TOKEN is not set; cannot validate initData');
+        return reply.status(500).send({ error: 'Server auth misconfigured' });
+      }
+
+      const parsed = validateTelegramInitData(initData, botToken);
       if (!parsed) {
         return reply.status(401).send({ error: 'Invalid initData' });
       }
@@ -45,13 +52,47 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
   }
 }
 
+// Reject initData older than this (seconds) to limit replay of leaked payloads.
+const MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60;
+
 /**
- * Minimal Telegram initData parser.
- * TODO: add HMAC validation using TELEGRAM_BOT_TOKEN in production.
+ * Validates Telegram WebApp initData and returns the parsed user.
+ *
+ * Implements the official check: build a data-check-string from all fields
+ * except `hash` (sorted, joined by "\n"), derive the secret key as
+ * HMAC-SHA256("WebAppData", botToken), and compare HMAC-SHA256(secret, string)
+ * against the provided hash.
+ * See https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
  */
-function parseTelegramInitData(initData: string): { user: { id: number; username?: string; first_name?: string } } | null {
+function validateTelegramInitData(
+  initData: string,
+  botToken: string,
+): { user: { id: number; username?: string; first_name?: string } } | null {
   try {
     const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+
+    const dataCheckString = [...params.entries()]
+      .map(([key, value]) => `${key}=${value}`)
+      .sort()
+      .join('\n');
+
+    const secretKey = createHmac('sha256', 'WebAppData').update(botToken).digest();
+    const computedHash = createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+    // Constant-time comparison; both sides are 64-char hex strings.
+    const a = Buffer.from(computedHash, 'hex');
+    const b = Buffer.from(hash, 'hex');
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+
+    // Reject stale payloads.
+    const authDate = Number(params.get('auth_date'));
+    if (authDate && Date.now() / 1000 - authDate > MAX_INIT_DATA_AGE_SECONDS) {
+      return null;
+    }
+
     const userStr = params.get('user');
     if (!userStr) return null;
     return { user: JSON.parse(userStr) };
