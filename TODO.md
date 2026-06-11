@@ -4,12 +4,16 @@ This document tracks planned features and known gaps in the current foundation.
 
 ---
 
-## 🔴 Critical (before any real testing)
+> **Architecture note:** the game is now **fully client-side** (`apps/web/src/game/`).
+> The Fastify API (`apps/api/`) and Prisma DB (`prisma/`) are legacy/unused. Items
+> below that referred to the server are struck through or reframed for the client.
 
-- [x] **Telegram HMAC auth** — `apps/api/src/middleware/auth.ts` now validates initData via HMAC-SHA256 (with auth_date freshness check) when `DEV_MODE=false`.
+## 🔴 Critical
+
+- [x] ~~Telegram HMAC auth~~ — No longer needed: single-player, no server to protect.
 - [ ] **Hero recovery** — Dead heroes have no recovery mechanic yet. Add a time-based or resource-based revival system.
-- [ ] **API input validation** — Add Zod schemas to all POST routes. Currently bodies are trusted as-is.
-- [ ] **Error handling** — Standardize error responses across all routes (`{ error, code, details }`).
+- [x] ~~API input validation / error handling~~ — Obsolete with the client-side engine; the engine validates moves and throws typed errors surfaced in the store.
+- [ ] **Save migration** — `storage.ts` resets on `version` mismatch. Add real migrations before changing `SAVE_VERSION`.
 
 ---
 

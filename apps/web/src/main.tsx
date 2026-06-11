@@ -9,6 +9,8 @@ declare global {
       WebApp: {
         ready: () => void;
         expand: () => void;
+        version: string;
+        isVersionAtLeast?: (version: string) => boolean;
         initData: string;
         initDataUnsafe: {
           user?: { id: number; username?: string; first_name?: string; last_name?: string };
@@ -16,6 +18,10 @@ declare global {
         close: () => void;
         BackButton: { show: () => void; hide: () => void; onClick: (cb: () => void) => void };
         MainButton: { text: string; show: () => void; hide: () => void; onClick: (cb: () => void) => void };
+        CloudStorage?: {
+          getItem: (key: string, cb: (err: Error | null, value: string | null) => void) => void;
+          setItem: (key: string, value: string, cb?: (err: Error | null, ok: boolean) => void) => void;
+        };
       };
     };
   }

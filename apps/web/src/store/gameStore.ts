@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api } from '../api/client.js';
+import { engine } from '../game/engine.js';
 import type {
   ResourceMap,
   HeroDTO,
@@ -67,16 +67,14 @@ export const useGameStore = create<GameState>((set, get) => ({
   loadPlayerState: async () => {
     set({ loading: true, error: null });
     try {
-      const [me, base] = await Promise.all([
-        api.get<{ player: { id: string; username: string }; resources: ResourceMap; heroes: HeroDTO[] }>('/player/me'),
-        api.get<{ buildings: BuildingDTO[] }>('/base'),
-      ]);
+      await engine.init();
+      const state = engine.getState();
       set({
-        playerId: me.player.id,
-        username: me.player.username,
-        resources: me.resources,
-        heroes: me.heroes,
-        buildings: base.buildings,
+        playerId: state.playerId,
+        username: state.username,
+        resources: state.resources,
+        heroes: state.heroes,
+        buildings: state.buildings,
       });
     } catch (e) {
       set({ error: (e as Error).message });
@@ -88,10 +86,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   upgradeBuilding: async (buildingType) => {
     set({ loading: true, error: null });
     try {
-      const result = await api.post<{ resources: ResourceMap; building: BuildingDTO }>(
-        '/base/upgrade',
-        { buildingType },
-      );
+      const result = await engine.upgradeBuilding(buildingType);
       set((s) => ({
         resources: result.resources,
         buildings: s.buildings.map((b) =>
@@ -108,7 +103,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   startExpedition: async (heroIds) => {
     set({ loading: true, error: null });
     try {
-      const expedition = await api.post<ExpeditionDTO>('/expedition/start', { heroIds });
+      const expedition = await engine.startExpedition(heroIds);
       set({ expedition, screen: 'labyrinth_run' });
     } catch (e) {
       set({ error: (e as Error).message });
@@ -122,17 +117,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!expedition) return;
     set({ loading: true, error: null });
     try {
-      const result = await api.post<{
-        expedition: ExpeditionDTO;
-        event: string;
-        combatId?: string;
-        loot?: Partial<ResourceMap>;
-      }>('/expedition/move', { expeditionId: expedition.id, targetNodeId });
-
+      const result = await engine.move(targetNodeId);
       set({ expedition: result.expedition });
 
       if (result.event === 'combat_started' && result.combatId) {
-        const combat = await api.get<CombatDTO>(`/combat/${result.combatId}`);
+        const combat = engine.getCombat(result.combatId);
         set({ combat, screen: 'combat' });
       } else if (result.event === 'exited') {
         set({ screen: 'labyrinth_run' }); // Will show extract button
@@ -149,16 +138,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!combat) return;
     set({ loading: true, error: null });
     try {
-      const result = await api.post<{ combat: CombatDTO }>('/combat/action', {
-        combatId: combat.id,
-        action,
-        targetId,
-      });
+      const result = await engine.combatAction(action as 'attack' | 'ability' | 'defend', targetId);
       set({ combat: result.combat });
 
       if (result.combat.status === 'victory') {
-        // Return to labyrinth
-        const expedition = await api.get<ExpeditionDTO>('/expedition/current');
+        const expedition = engine.getCurrentExpedition();
         set({ expedition, screen: 'labyrinth_run', combat: null });
       } else if (result.combat.status === 'defeat') {
         set({
@@ -181,10 +165,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!expedition) return;
     set({ loading: true, error: null });
     try {
-      const result = await api.post<{ success: boolean; lootGained: Partial<ResourceMap>; message: string }>(
-        '/expedition/extract',
-        { expeditionId: expedition.id },
-      );
+      const result = await engine.extract();
       set({
         screen: 'results',
         expedition: null,
@@ -199,7 +180,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   refreshCombat: async (combatId) => {
-    const combat = await api.get<CombatDTO>(`/combat/${combatId}`);
+    const combat = engine.getCombat(combatId);
     set({ combat });
   },
 }));

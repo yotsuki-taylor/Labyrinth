@@ -1,115 +1,97 @@
 # 🏰 Labyrinth — Telegram Mini App Game
 
-PvPvE extraction roguelite in a procedural labyrinth.
+PvE extraction roguelite in a procedural labyrinth. Runs **fully client-side** —
+no backend or database required. Hosted as a static site on GitHub Pages and
+opened as a Telegram Mini App.
 
 ## Stack
 
 | Layer | Tech |
 |-------|------|
 | Frontend | React 18 + TypeScript + Vite |
-| Backend | Node.js + TypeScript + Fastify |
-| Database | PostgreSQL |
-| ORM | Prisma |
+| Game logic | Runs in the browser (`apps/web/src/game/`) |
+| Persistence | Telegram CloudStorage (cross-device) + `localStorage` fallback |
 | Shared types | `@labyrinth/shared` (monorepo package) |
-| Telegram | `@telegram-apps/sdk-react` |
+| Telegram | `telegram-web-app.js` (`window.Telegram.WebApp`) |
+| Hosting | GitHub Pages (static) |
+
+> **Note on the backend:** `apps/api/` and `prisma/` contain an earlier
+> server-authoritative implementation. The game no longer uses them — all logic
+> moved into the browser so the app can be hosted for free with no server. The
+> server code is kept in the repo as a reference / starting point for a future
+> online mode (PvP, leaderboards), which would need a real backend again.
 
 ## Project Structure
 
 ```
-labyrinth-game/
+Labyrinth/
 ├── apps/
-│   ├── web/          # React frontend (Telegram Mini App)
-│   └── api/          # Fastify REST API
+│   ├── web/              # React frontend — the actual game
+│   │   └── src/game/     # Client-side engine (combat, labyrinth, save state)
+│   └── api/              # [legacy] Fastify REST API (unused by the game)
 ├── packages/
-│   └── shared/       # Shared TypeScript types & game constants
-├── prisma/
-│   ├── schema.prisma # Database schema
-│   └── seed.ts       # Seed data
-├── docs/             # Architecture notes
-├── .env.example
+│   └── shared/           # Shared TypeScript types & game constants
+├── prisma/               # [legacy] Database schema & seed (unused)
+├── .github/workflows/    # GitHub Pages deploy workflow
 └── README.md
 ```
 
-## Prerequisites
+## How it works (client-side)
 
-- Node.js 18+
-- PostgreSQL 14+ running locally
-- npm 8+ (with workspaces support)
+All gameplay runs in `apps/web/src/game/`:
 
-## Quick Start
+| File | Responsibility |
+|------|----------------|
+| `engine.ts` | In-memory game state + all actions (expedition, combat, base, extract) |
+| `labyrinth.ts` | Procedural labyrinth graph generation |
+| `combat.ts` | Turn-based combat resolution, enemy AI, hero abilities |
+| `state.ts` | Save-state shape and helpers |
+| `storage.ts` | Persistence: Telegram CloudStorage + `localStorage` |
 
-### 1. Clone & install dependencies
+The Zustand store (`store/gameStore.ts`) calls the engine directly; React
+screens never talk to a network. A new player (starter heroes, buildings, and
+resources) is created automatically on first launch.
+
+## Quick Start (local dev)
 
 ```bash
-git clone <repo>
-cd labyrinth-game
 npm install
+npm run dev --workspace=apps/web   # http://localhost:5173
 ```
 
-### 2. Set up environment variables
+To preview a production build at the GitHub Pages sub-path:
 
 ```bash
-cp .env.example .env
-# Edit .env — set DATABASE_URL to your PostgreSQL connection string
+npm run build --workspace=apps/web
+npm run preview --workspace=apps/web   # http://localhost:4173/Labyrinth/
 ```
 
-### 3. Set up the database
+In a normal browser there's no Telegram CloudStorage, so progress is saved to
+`localStorage`. Inside Telegram (client version ≥ 6.9), progress also syncs to
+CloudStorage across devices.
 
-```bash
-# Generate Prisma client
-npm run db:generate
+## Deployment (GitHub Pages)
 
-# Run migrations (creates all tables)
-npm run db:migrate
+Pushing changes under `apps/web/**` or `packages/shared/**` to `main` triggers
+`.github/workflows/deploy.yml`, which builds the app and publishes it to GitHub
+Pages. The repo's **Settings → Pages → Source** must be set to **GitHub Actions**.
 
-# Seed with hero templates and a demo player
-npm run db:seed
-```
+The Vite `base` is set to `/Labyrinth/` to match the Pages sub-path
+(`https://<user>.github.io/Labyrinth/`).
 
-### 4. Start development servers
+## Telegram Bot Setup
 
-```bash
-# Starts both API (port 3001) and Web (port 5173) in parallel
-npm run dev
-```
+1. Create a bot via [@BotFather](https://t.me/BotFather).
+2. Attach the Mini App URL as the bot's menu button (Bot API):
+   ```
+   POST https://api.telegram.org/bot<TOKEN>/setChatMenuButton
+   { "menu_button": { "type": "web_app", "text": "⚔ Play",
+     "web_app": { "url": "https://<user>.github.io/Labyrinth/" } } }
+   ```
+3. Open the bot in Telegram and tap the menu button to launch the game.
 
-Or start them individually:
-
-```bash
-npm run dev:api   # API only
-npm run dev:web   # Frontend only
-```
-
-### 5. Open in browser
-
-- Frontend: http://localhost:5173
-- API: http://localhost:3001
-- Health check: http://localhost:3001/health
-- Prisma Studio: `npm run db:studio`
-
-## Dev Mode (no Telegram required)
-
-Set `DEV_MODE=true` in `.env` (already set in `.env.example`).
-
-In this mode, auth middleware uses `DEV_USER_ID` (default: `123456789`) as the Telegram ID and skips signature validation. The demo player from the seed is used automatically.
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check + DB ping |
-| GET | `/player/me` | Full player state |
-| GET | `/base` | Base with buildings |
-| POST | `/base/upgrade` | Upgrade a building |
-| GET | `/heroes` | All heroes |
-| POST | `/expedition/start` | Start a new expedition |
-| GET | `/expedition/current` | Active expedition |
-| POST | `/expedition/move` | Move to a node |
-| POST | `/expedition/extract` | Extract loot at exit |
-| GET | `/combat/:id` | Get combat state |
-| POST | `/combat/action` | Perform combat action |
-
-All endpoints except `/health` require the `x-telegram-init-data` header (or `DEV_MODE=true`).
+Because the game is single-player and client-side, no `initData` signature
+validation is needed — there is no server to protect.
 
 ## Game Flow
 
@@ -120,16 +102,8 @@ Base Screen
             ├─ Loot nodes (auto-collect resources)
             ├─ Combat nodes (turn-based fight)
             │    ├─ Victory → continue exploring
-            │    └─ Defeat → lose all pending loot
+            │    └─ Defeat → lose all pending loot + the heroes on the run
             └─ Exit node
                  └─ Extract → resources added to base
                       └─ Results Screen → back to Base
 ```
-
-## Telegram Bot Setup (for production)
-
-1. Create a bot via [@BotFather](https://t.me/BotFather)
-2. Set `TELEGRAM_BOT_TOKEN` in `.env`
-3. Set `DEV_MODE=false`
-4. Enable HMAC validation in `apps/api/src/middleware/auth.ts` (marked as TODO)
-5. Host the frontend and register the Mini App URL with BotFather
