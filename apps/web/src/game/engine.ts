@@ -17,7 +17,7 @@ import type {
   CombatActionType,
   ResourceType,
 } from '@labyrinth/shared';
-import type { SaveState, HeroSave, ExpeditionSave, CombatSave } from './state.js';
+import type { SaveState, HeroSave, ExpeditionSave, CombatSave, MetaSave } from './state.js';
 import { SAVE_VERSION, metaOf } from './state.js';
 import { generateLabyrinth } from './labyrinth.js';
 import {
@@ -34,11 +34,50 @@ const XP_TO_LEVEL = (level: number) => level * 100;
 const REVIVE_TIME_MS = 60 * 60 * 1000; // 1 hour
 export const REVIVE_GOLD_COST = 100;
 
+export const BARRACKS_UNLOCKS: Record<number, { class: HeroClass; name: string }[]> = {
+  2: [{ class: 'assassin', name: 'Zara' }, { class: 'sorcerer', name: 'Ignis' }],
+  3: [{ class: 'paladin', name: 'Theron' }, { class: 'barbarian', name: 'Grak' }],
+  4: [{ class: 'druid', name: 'Willow' }, { class: 'bard', name: 'Lyric' }],
+  5: [{ class: 'alchemist', name: 'Vesper' }, { class: 'inventor', name: 'Cog' }],
+};
+
+function migrateSave(raw: Record<string, any>): void {
+  // v1 → v2: rename guardian/occultist/medic to warrior/warlock/cleric
+  if (raw.version === 1) {
+    const renames: Record<string, string> = { guardian: 'warrior', occultist: 'warlock', medic: 'cleric' };
+    for (const h of raw.heroes ?? []) {
+      if (renames[h.class]) h.class = renames[h.class];
+    }
+    // Add heroes that should have been unlocked by current barracks level
+    const barracksLevel = (raw.buildings ?? []).find((b: any) => b.type === 'barracks')?.level ?? 1;
+    const existingClasses = new Set((raw.heroes ?? []).map((h: any) => h.class));
+    for (const [lvlStr, pool] of Object.entries(BARRACKS_UNLOCKS)) {
+      if (barracksLevel >= Number(lvlStr)) {
+        for (const { class: cls, name } of pool) {
+          if (!existingClasses.has(cls)) {
+            raw.heroes.push({
+              id: newId('hero'),
+              name,
+              class: cls,
+              level: 1,
+              xp: 0,
+              hp: HERO_TEMPLATES[cls as HeroClass].baseStats.maxHp,
+              isAlive: true,
+            });
+            existingClasses.add(cls);
+          }
+        }
+      }
+    }
+    raw.version = 2;
+  }
+}
+
 const STARTER_HEROES: { class: HeroClass; name: string }[] = [
-  { class: 'guardian', name: 'Aldric' },
+  { class: 'warrior', name: 'Aldric' },
   { class: 'ranger', name: 'Sylva' },
-  { class: 'occultist', name: 'Morvyn' },
-  { class: 'medic', name: 'Eryn' },
+  { class: 'warlock', name: 'Morvyn' },
+  { class: 'cleric', name: 'Eryn' },
 ];
 
 function newId(prefix: string): string {

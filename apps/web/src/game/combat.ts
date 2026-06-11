@@ -88,7 +88,7 @@ export function processCombatAction(
     }
   } else if (action === 'ability') {
     if (actor.type === 'hero') {
-      handleHeroAbility(getHeroClass(actor.name), actor, participants, newLog, turn, updatedParticipants);
+      handleHeroAbility(actor.heroClass ?? getHeroClass(actor.name), actor, participants, newLog, turn, updatedParticipants);
     }
   } else if (action === 'defend') {
     newLog.push({
@@ -147,9 +147,11 @@ function getDefaultTarget(participants: CombatParticipantDTO[], actor: CombatPar
 
 function getHeroClass(name: string): string {
   const map: Record<string, string> = {
-    Aldric: 'guardian', Sylva: 'ranger', Morvyn: 'occultist', Eryn: 'medic',
+    Aldric: 'warrior', Sylva: 'ranger', Morvyn: 'warlock', Eryn: 'cleric',
+    Zara: 'assassin', Ignis: 'sorcerer', Theron: 'paladin', Grak: 'barbarian',
+    Willow: 'druid', Lyric: 'bard', Vesper: 'alchemist', Cog: 'inventor',
   };
-  return map[name] ?? 'guardian';
+  return map[name] ?? 'warrior';
 }
 
 function handleHeroAbility(
@@ -160,29 +162,100 @@ function handleHeroAbility(
   turn: number,
   updates: Update[],
 ) {
-  if (cls === 'occultist') {
-    const enemies = participants.filter((p) => p.type === 'enemy' && p.isAlive);
+  const enemies = participants.filter((p) => p.type === 'enemy' && p.isAlive);
+  const heroes = participants.filter((p) => p.type === 'hero' && p.isAlive);
+
+  if (cls === 'warlock') {
     for (const e of enemies) {
       const newHp = Math.max(0, e.hp - 30);
       updates.push({ id: e.id, hp: newHp, isAlive: newHp > 0 });
     }
     log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', damage: 30, message: `${actor.name} unleashes Void Blast for 30 damage to all enemies!` });
-  } else if (cls === 'medic') {
-    const lowestHero = participants.filter((p) => p.type === 'hero' && p.isAlive).sort((a, b) => a.hp - b.hp)[0];
-    if (lowestHero) {
-      const newHp = Math.min(lowestHero.maxHp, lowestHero.hp + 25);
-      updates.push({ id: lowestHero.id, hp: newHp });
-      log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', targetId: lowestHero.id, targetName: lowestHero.name, heal: 25, message: `${actor.name} casts Field Heal on ${lowestHero.name} for 25 HP.` });
+
+  } else if (cls === 'cleric' || cls === 'paladin') {
+    const healAmt = cls === 'cleric' ? 25 : 20;
+    const target = heroes.sort((a, b) => a.hp - b.hp)[0];
+    if (target) {
+      const newHp = Math.min(target.maxHp, target.hp + healAmt);
+      updates.push({ id: target.id, hp: newHp });
+      log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', targetId: target.id, targetName: target.name, heal: healAmt, message: `${actor.name} heals ${target.name} for ${healAmt} HP.` });
     }
+
   } else if (cls === 'ranger') {
-    const target = participants.find((p) => p.type === 'enemy' && p.isAlive);
+    const target = enemies[0];
     if (target) {
       const dmg = actor.attack * 2;
       const newHp = Math.max(0, target.hp - dmg);
       updates.push({ id: target.id, hp: newHp, isAlive: newHp > 0 });
       log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', targetId: target.id, targetName: target.name, damage: dmg, message: `${actor.name} fires Aimed Shot at ${target.name} for ${dmg} damage!` });
     }
+
+  } else if (cls === 'assassin') {
+    const target = enemies[0];
+    if (target) {
+      const dmg = actor.attack * 3;
+      const newHp = Math.max(0, target.hp - dmg);
+      updates.push({ id: target.id, hp: newHp, isAlive: newHp > 0 });
+      log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', targetId: target.id, targetName: target.name, damage: dmg, message: `${actor.name} backstabs ${target.name} for ${dmg} damage!` });
+    }
+
+  } else if (cls === 'barbarian') {
+    const target = enemies[0];
+    if (target) {
+      const dmg = actor.attack * 2;
+      const newHp = Math.max(0, target.hp - dmg);
+      updates.push({ id: target.id, hp: newHp, isAlive: newHp > 0 });
+      log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', targetId: target.id, targetName: target.name, damage: dmg, message: `${actor.name} unleashes Berserker Slash on ${target.name} for ${dmg} damage!` });
+    }
+
+  } else if (cls === 'sorcerer') {
+    const dmg = 25;
+    for (const e of enemies) {
+      const newHp = Math.max(0, e.hp - dmg);
+      updates.push({ id: e.id, hp: newHp, isAlive: newHp > 0 });
+    }
+    log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', damage: dmg, message: `${actor.name} casts Arcane Nova for ${dmg} fixed damage to all enemies!` });
+
+  } else if (cls === 'druid') {
+    const dmg = 20;
+    for (const e of enemies) {
+      const newHp = Math.max(0, e.hp - dmg);
+      updates.push({ id: e.id, hp: newHp, isAlive: newHp > 0 });
+    }
+    const selfHeal = Math.min(actor.maxHp, actor.hp + 15);
+    updates.push({ id: actor.id, hp: selfHeal });
+    log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', damage: dmg, heal: 15, message: `${actor.name} calls Nature's Wrath — ${dmg} dmg to all enemies and heals self 15 HP!` });
+
+  } else if (cls === 'bard') {
+    const healAmt = 10;
+    for (const h of heroes) {
+      const existing = updates.find(u => u.id === h.id);
+      const currentHp = existing?.hp ?? h.hp;
+      const newHp = Math.min(h.maxHp, currentHp + healAmt);
+      if (existing) existing.hp = newHp;
+      else updates.push({ id: h.id, hp: newHp });
+    }
+    log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', heal: healAmt, message: `${actor.name} plays Battle Hymn, restoring ${healAmt} HP to all heroes!` });
+
+  } else if (cls === 'alchemist') {
+    const target = enemies[0];
+    if (target) {
+      const dmg = 40;
+      const newHp = Math.max(0, target.hp - dmg);
+      updates.push({ id: target.id, hp: newHp, isAlive: newHp > 0 });
+      log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', targetId: target.id, targetName: target.name, damage: dmg, message: `${actor.name} hurls Explosive Vial at ${target.name} for ${dmg} fixed damage!` });
+    }
+
+  } else if (cls === 'inventor') {
+    const dmg = 15;
+    for (const e of enemies) {
+      const newHp = Math.max(0, e.hp - dmg);
+      updates.push({ id: e.id, hp: newHp, isAlive: newHp > 0 });
+    }
+    log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', damage: dmg, message: `${actor.name} deploys Mechanical Swarm for ${dmg} damage to all enemies!` });
+
   } else {
+    // warrior: Shield Wall
     log.push({ turn, actorId: actor.id, actorName: actor.name, action: 'ability', message: `${actor.name} raises Shield Wall!` });
   }
 }
