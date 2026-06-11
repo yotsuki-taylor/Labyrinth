@@ -42,17 +42,19 @@ export function BaseScreen() {
           if (!cfg) return null;
           const cost = cfg.upgradeCost(b.level);
           const atMax = b.level >= cfg.maxLevel;
-
-          const canAfford = !atMax && (Object.entries(cost) as [string, number][]).every(
+          const thLevel = buildings.find((x) => x.type === 'town_hall')?.level ?? 1;
+          const gatedByTH = b.type !== 'town_hall' && !atMax && b.level >= thLevel;
+          const canAffordResources = !atMax && !gatedByTH && (Object.entries(cost) as [string, number][]).every(
             ([k, v]) => (resources[k as keyof typeof resources] ?? 0) >= v,
           );
+          const canUpgrade = canAffordResources && !loading;
 
           return (
             <div key={b.id} style={s.card}>
               <div style={s.cardTitle}>{cfg.label}</div>
               <div style={s.cardLevel}>Level {b.level} / {cfg.maxLevel}</div>
-              <div style={s.cardDesc}>{cfg.description}</div>
-              {!atMax && (
+              <div style={s.cardEffect}>{cfg.effectAt(b.level)}</div>
+              {!atMax && !gatedByTH && (
                 <div style={s.costRow}>
                   {(Object.entries(cost) as [string, number][])
                     .filter(([, v]) => v > 0)
@@ -63,9 +65,12 @@ export function BaseScreen() {
                     ))}
                 </div>
               )}
+              {gatedByTH && (
+                <div style={s.gateNote}>Requires TH Lv {b.level + 1}</div>
+              )}
               <button
-                style={{ ...s.btn, opacity: canAfford && !loading ? 1 : 0.4 }}
-                disabled={!canAfford || loading || atMax}
+                style={{ ...s.btn, opacity: canUpgrade ? 1 : 0.4 }}
+                disabled={!canUpgrade || atMax}
                 onClick={() => upgradeBuilding(b.type)}
               >
                 {atMax ? 'MAX' : 'Upgrade'}
@@ -140,8 +145,9 @@ const s: Record<string, React.CSSProperties> = {
   card: { background: '#1a1a2e', border: '1px solid #2a2a40', borderRadius: 10, padding: 12 },
   cardTitle: { fontWeight: 700, fontSize: 14, marginBottom: 2, color: '#c9b0ff' },
   cardLevel: { fontSize: 12, color: '#7a7a9a', marginBottom: 4 },
-  cardDesc: { fontSize: 11, color: '#8888aa', marginBottom: 8, lineHeight: 1.4 },
+  cardEffect: { fontSize: 11, color: '#a0c4ff', marginBottom: 6, lineHeight: 1.4 },
   costRow: { display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11, marginBottom: 8 },
+  gateNote: { fontSize: 11, color: '#facc15', marginBottom: 8 },
   btn: { width: '100%', padding: '6px 0', background: '#3b2d6e', border: 'none', borderRadius: 6, color: '#e0d0ff', cursor: 'pointer', fontSize: 13, transition: 'opacity 0.2s' },
   sectionTitle: { fontSize: 12, color: '#7a7a9a', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginTop: 4 },
   heroList: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 },

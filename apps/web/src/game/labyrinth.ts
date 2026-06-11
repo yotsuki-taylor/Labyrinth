@@ -8,6 +8,9 @@ export function generateLabyrinth(mapRoomLevel = 1): ExpeditionNodeDTO[] {
   const nodeCount = 10 + Math.min(mapRoomLevel - 1, 5); // 10–15 nodes
   const nodes: ExpeditionNodeDTO[] = [];
 
+  // Map Room increases loot node density: +4% per level above 1.
+  const lootChance = Math.min(0.45, 0.25 + (mapRoomLevel - 1) * 0.04);
+
   for (let i = 0; i < nodeCount; i++) {
     let type: NodeType;
     if (i === 0) {
@@ -16,8 +19,8 @@ export function generateLabyrinth(mapRoomLevel = 1): ExpeditionNodeDTO[] {
       type = 'exit';
     } else {
       const roll = Math.random();
-      if (roll < 0.25) type = 'loot';
-      else if (roll < 0.55) type = 'pve_combat';
+      if (roll < lootChance) type = 'loot';
+      else if (roll < lootChance + 0.30) type = 'pve_combat';
       else type = 'empty';
     }
 

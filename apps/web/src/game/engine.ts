@@ -54,19 +54,22 @@ function telegramUsername(): string {
   return u?.username ?? u?.first_name ?? 'Adventurer';
 }
 
-/** Derives display stats from a hero's class and level (matches old server math). */
-function heroStats(h: HeroSave): HeroStats {
+/** Derives display stats from a hero's class and level. forgeLevel applies equipment bonus. */
+function heroStats(h: HeroSave, forgeLevel = 1): HeroStats {
   const base = HERO_TEMPLATES[h.class].baseStats;
+  const forgeBonus = (forgeLevel - 1) * 3;
   return {
     hp: h.hp,
     maxHp: base.maxHp + (h.level - 1) * 10,
-    attack: base.attack + (h.level - 1) * 2,
-    defense: base.defense + (h.level - 1) * 1,
+    attack: base.attack + (h.level - 1) * 2 + forgeBonus,
+    defense: base.defense + (h.level - 1) * 1 + forgeBonus,
     speed: base.speed,
   };
 }
 
-function heroToDTO(h: HeroSave): HeroDTO {
+const STORAGE_CAPS = [1000, 2000, 5000, 10000, Infinity];
+
+function heroToDTO(h: HeroSave, forgeLevel = 1): HeroDTO {
   return {
     id: h.id,
     name: h.name,
@@ -75,7 +78,7 @@ function heroToDTO(h: HeroSave): HeroDTO {
     xp: h.xp,
     isAlive: h.isAlive,
     reviveAt: h.reviveAt,
-    stats: heroStats(h),
+    stats: heroStats(h, forgeLevel),
   };
 }
 
@@ -135,6 +138,10 @@ class GameEngine {
   private save: SaveState = createNewSave();
   private ready = false;
 
+  private bldLevel(type: string): number {
+    return this.save.buildings.find((b) => b.type === type)?.level ?? 1;
+  }
+
   /** Loads (or creates) the save, reconciling local and cloud copies. */
   async init(): Promise<void> {
     if (this.ready) return;
@@ -185,11 +192,12 @@ class GameEngine {
     }
     if (dirty) void this.persist();
 
+    const forge = this.bldLevel('forge');
     return {
       playerId: this.save.player.id,
       username: this.save.player.username,
       resources: this.save.resources,
-      heroes: this.save.heroes.map(heroToDTO),
+      heroes: this.save.heroes.map((h) => heroToDTO(h, forge)),
       buildings: this.save.buildings.map((b) => ({ ...b })),
     };
   }
@@ -214,6 +222,14 @@ class GameEngine {
     const building = this.save.buildings.find((b) => b.type === buildingType);
     if (!building) throw new Error('Building not found');
     if (building.level >= config.maxLevel) throw new Error('Building already at max level');
+
+    // Town Hall gates all other buildings to max level ≤ TH level.
+    if (buildingType !== 'town_hall') {
+      const thLevel = this.bldLevel('town_hall');
+      if (building.level >= thLevel) {
+        throw new Error(`Upgrade Town Hall to level ${building.level + 1} first`);
+      }
+    }
 
     const cost = config.upgradeCost(building.level);
     if (!canAfford(this.save.resources, cost)) throw new Error('Insufficient resources');
@@ -300,8 +316,9 @@ class GameEngine {
     const nodeIndex = e.nodes.findIndex((n) => n.id === nodeId);
     const heroes = this.save.heroes.filter((h) => e.heroIds.includes(h.id) && h.isAlive);
 
+    const forge = this.bldLevel('forge');
     const heroParticipants: CombatParticipantDTO[] = heroes.map((h) => {
-      const stats = heroStats(h);
+      const stats = heroStats(h, forge);
       return {
         id: newId('cp'),
         type: 'hero',
@@ -351,24 +368,29 @@ class GameEngine {
     if (c.status === 'defeat') {
       const e = this.save.expedition;
       if (e) {
+        // Barracks reduces the recovery timer.
+        const barracks = this.bldLevel('barracks');
+        const reviveMs = REVIVE_TIME_MS * Math.max(0.2, 1 - (barracks - 1) * 0.2);
         for (const id of e.heroIds) {
           const h = this.save.heroes.find((x) => x.id === id);
           if (h) {
             h.hp = 0;
             h.isAlive = false;
-            h.reviveAt = Date.now() + REVIVE_TIME_MS;
+            h.reviveAt = Date.now() + reviveMs;
           }
         }
       }
       this.save.expedition = null;
       this.save.combat = null;
     } else if (c.status === 'victory') {
-      // Award XP to surviving heroes on this expedition.
+      // Award XP to surviving heroes; Laboratory multiplies the gain.
       const e = this.save.expedition;
       if (e) {
         const nodeIndex = e.nodes.findIndex((n) => n.id === c.nodeId);
         const tier = Math.floor(Math.max(0, nodeIndex) / 3) + 1;
-        const xpGained = XP_PER_TIER * tier;
+        const lab = this.bldLevel('laboratory');
+        const xpMultiplier = 1 + (lab - 1) * 0.2;
+        const xpGained = Math.round(XP_PER_TIER * tier * xpMultiplier);
 
         for (const id of e.heroIds) {
           const h = this.save.heroes.find((x) => x.id === id);
@@ -381,7 +403,7 @@ class GameEngine {
           if (h.xp >= threshold) {
             h.xp -= threshold;
             h.level += 1;
-            h.hp = heroStats(h).maxHp; // full heal on level-up
+            h.hp = heroStats(h).maxHp;
           }
         }
       }
@@ -412,7 +434,8 @@ class GameEngine {
     h.reviveAt = undefined;
 
     await this.persist();
-    return { resources: { ...this.save.resources }, heroes: this.save.heroes.map(heroToDTO) };
+    const forge = this.bldLevel('forge');
+    return { resources: { ...this.save.resources }, heroes: this.save.heroes.map((h) => heroToDTO(h, forge)) };
   }
 
   async extract(): Promise<{ success: boolean; lootGained: Partial<ResourceMap>; message: string }> {
@@ -423,9 +446,11 @@ class GameEngine {
     if (currentNode?.type !== 'exit') throw new Error('Must be on an exit node to extract');
 
     const loot = { ...e.pendingLoot };
+    const storage = this.bldLevel('storage');
+    const cap = STORAGE_CAPS[Math.min(storage - 1, STORAGE_CAPS.length - 1)];
     for (const [k, v] of Object.entries(loot)) {
       const key = k as ResourceType;
-      this.save.resources[key] = (this.save.resources[key] ?? 0) + (v ?? 0);
+      this.save.resources[key] = Math.min((this.save.resources[key] ?? 0) + (v ?? 0), cap);
     }
 
     this.save.expedition = null;
