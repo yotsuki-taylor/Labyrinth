@@ -29,6 +29,11 @@ import {
 } from './combat.js';
 import { loadLocal, saveLocal, loadCloudMeta, saveCloudMeta } from './storage.js';
 
+const XP_PER_TIER = 30;
+const XP_TO_LEVEL = (level: number) => level * 100;
+const REVIVE_TIME_MS = 60 * 60 * 1000; // 1 hour
+export const REVIVE_GOLD_COST = 100;
+
 const STARTER_HEROES: { class: HeroClass; name: string }[] = [
   { class: 'guardian', name: 'Aldric' },
   { class: 'ranger', name: 'Sylva' },
@@ -62,7 +67,16 @@ function heroStats(h: HeroSave): HeroStats {
 }
 
 function heroToDTO(h: HeroSave): HeroDTO {
-  return { id: h.id, name: h.name, class: h.class, level: h.level, xp: h.xp, stats: heroStats(h) };
+  return {
+    id: h.id,
+    name: h.name,
+    class: h.class,
+    level: h.level,
+    xp: h.xp,
+    isAlive: h.isAlive,
+    reviveAt: h.reviveAt,
+    stats: heroStats(h),
+  };
 }
 
 function expeditionToDTO(e: ExpeditionSave): ExpeditionDTO {
@@ -158,6 +172,19 @@ class GameEngine {
   // --- Reads ---
 
   getState() {
+    // Auto-revive heroes whose recovery timer has elapsed.
+    const now = Date.now();
+    let dirty = false;
+    for (const h of this.save.heroes) {
+      if (!h.isAlive && h.reviveAt !== undefined && now >= h.reviveAt) {
+        h.isAlive = true;
+        h.hp = heroStats(h).maxHp;
+        h.reviveAt = undefined;
+        dirty = true;
+      }
+    }
+    if (dirty) void this.persist();
+
     return {
       playerId: this.save.player.id,
       username: this.save.player.username,
@@ -322,7 +349,6 @@ class GameEngine {
     const result = combatToDTO(c);
 
     if (c.status === 'defeat') {
-      // Lose the run and the heroes who were on it (permadeath).
       const e = this.save.expedition;
       if (e) {
         for (const id of e.heroIds) {
@@ -330,17 +356,63 @@ class GameEngine {
           if (h) {
             h.hp = 0;
             h.isAlive = false;
+            h.reviveAt = Date.now() + REVIVE_TIME_MS;
           }
         }
       }
       this.save.expedition = null;
       this.save.combat = null;
     } else if (c.status === 'victory') {
+      // Award XP to surviving heroes on this expedition.
+      const e = this.save.expedition;
+      if (e) {
+        const nodeIndex = e.nodes.findIndex((n) => n.id === c.nodeId);
+        const tier = Math.floor(Math.max(0, nodeIndex) / 3) + 1;
+        const xpGained = XP_PER_TIER * tier;
+
+        for (const id of e.heroIds) {
+          const h = this.save.heroes.find((x) => x.id === id);
+          if (!h || !h.isAlive) continue;
+          const survived = c.participants.some((p) => p.heroId === id && p.isAlive);
+          if (!survived) continue;
+
+          h.xp += xpGained;
+          const threshold = XP_TO_LEVEL(h.level);
+          if (h.xp >= threshold) {
+            h.xp -= threshold;
+            h.level += 1;
+            h.hp = heroStats(h).maxHp; // full heal on level-up
+          }
+        }
+      }
       this.save.combat = null;
     }
 
     await this.persist();
     return { combat: result };
+  }
+
+  async reviveHero(heroId: string): Promise<{ resources: ResourceMap; heroes: HeroDTO[] }> {
+    const h = this.save.heroes.find((x) => x.id === heroId);
+    if (!h) throw new Error('Hero not found');
+    if (h.isAlive) throw new Error('Hero is already alive');
+
+    const now = Date.now();
+    const timerExpired = h.reviveAt === undefined || now >= h.reviveAt;
+
+    if (!timerExpired) {
+      if ((this.save.resources.gold ?? 0) < REVIVE_GOLD_COST) {
+        throw new Error(`Need ${REVIVE_GOLD_COST} gold to revive`);
+      }
+      this.save.resources.gold -= REVIVE_GOLD_COST;
+    }
+
+    h.isAlive = true;
+    h.hp = heroStats(h).maxHp;
+    h.reviveAt = undefined;
+
+    await this.persist();
+    return { resources: { ...this.save.resources }, heroes: this.save.heroes.map(heroToDTO) };
   }
 
   async extract(): Promise<{ success: boolean; lootGained: Partial<ResourceMap>; message: string }> {

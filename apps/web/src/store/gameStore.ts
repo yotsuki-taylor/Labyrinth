@@ -45,6 +45,7 @@ interface GameState {
   performCombatAction: (action: string, targetId?: string) => Promise<void>;
   extract: () => Promise<void>;
   refreshCombat: (combatId: string) => Promise<void>;
+  reviveHero: (heroId: string) => Promise<void>;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -143,7 +144,8 @@ export const useGameStore = create<GameState>((set, get) => ({
 
       if (result.combat.status === 'victory') {
         const expedition = engine.getCurrentExpedition();
-        set({ expedition, screen: 'labyrinth_run', combat: null });
+        const state = engine.getState();
+        set({ expedition, screen: 'labyrinth_run', combat: null, heroes: state.heroes, resources: state.resources });
       } else if (result.combat.status === 'defeat') {
         set({
           screen: 'results',
@@ -182,5 +184,17 @@ export const useGameStore = create<GameState>((set, get) => ({
   refreshCombat: async (combatId) => {
     const combat = engine.getCombat(combatId);
     set({ combat });
+  },
+
+  reviveHero: async (heroId) => {
+    set({ loading: true, error: null });
+    try {
+      const result = await engine.reviveHero(heroId);
+      set({ heroes: result.heroes, resources: result.resources });
+    } catch (e) {
+      set({ error: (e as Error).message });
+    } finally {
+      set({ loading: false });
+    }
   },
 }));

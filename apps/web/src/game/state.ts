@@ -18,8 +18,10 @@ export interface HeroSave {
   class: HeroClass;
   level: number;
   xp: number;
-  hp: number; // current HP; 0 means dead (permadeath, matching server)
+  hp: number; // current HP; 0 means dead
   isAlive: boolean;
+  /** Unix timestamp (ms) when the hero auto-revives after death. */
+  reviveAt?: number;
 }
 
 export interface ExpeditionSave {

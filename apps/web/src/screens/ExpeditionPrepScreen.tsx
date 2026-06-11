@@ -6,7 +6,7 @@ export function ExpeditionPrepScreen() {
   const { heroes, startExpedition, setScreen, loading, error } = useGameStore();
   const [selected, setSelected] = useState<string[]>([]);
 
-  const aliveHeroes = heroes.filter((h) => h.stats.hp > 0);
+  const aliveHeroes = heroes.filter((h) => h.isAlive);
 
   function toggle(id: string) {
     setSelected((prev) =>

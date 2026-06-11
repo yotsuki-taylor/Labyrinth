@@ -55,5 +55,8 @@ export interface HeroDTO {
   class: HeroClass;
   level: number;
   xp: number;
+  isAlive: boolean;
+  /** Unix timestamp (ms) when the hero auto-revives; undefined if alive or pending manual revive. */
+  reviveAt?: number;
   stats: HeroStats;
 }
