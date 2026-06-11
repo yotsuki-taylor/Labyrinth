@@ -1,0 +1,205 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Player ─────────────────────────────────────────────────────────────────
+
+model Player {
+  id         String   @id @default(cuid())
+  telegramId String   @unique
+  username   String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  base            Base?
+  heroes          Hero[]
+  resourceBalance ResourceBalance?
+  expeditions     Expedition[]
+
+  @@map("players")
+}
+
+// ─── Base & Buildings ────────────────────────────────────────────────────────
+
+model Base {
+  id        String   @id @default(cuid())
+  level     Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  playerId  String     @unique
+  player    Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  buildings Building[]
+
+  @@map("bases")
+}
+
+model Building {
+  id        String   @id @default(cuid())
+  type      String   // BuildingType enum value
+  level     Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  baseId String
+  base   Base   @relation(fields: [baseId], references: [id], onDelete: Cascade)
+
+  @@unique([baseId, type])
+  @@map("buildings")
+}
+
+// ─── Resources ───────────────────────────────────────────────────────────────
+
+model ResourceBalance {
+  id       String @id @default(cuid())
+  gold     Int    @default(0)
+  stone    Int    @default(0)
+  iron     Int    @default(0)
+  essence  Int    @default(0)
+  relics   Int    @default(0)
+
+  playerId String @unique
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@map("resource_balances")
+}
+
+// ─── Heroes ──────────────────────────────────────────────────────────────────
+
+model HeroTemplate {
+  id          String @id @default(cuid())
+  class       String @unique // HeroClass enum value
+  label       String
+  description String
+  baseHp      Int
+  baseAttack  Int
+  baseDefense Int
+  baseSpeed   Int
+
+  heroes Hero[]
+
+  @@map("hero_templates")
+}
+
+model Hero {
+  id        String   @id @default(cuid())
+  name      String
+  level     Int      @default(1)
+  xp        Int      @default(0)
+  hp        Int
+  isAlive   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  playerId       String
+  player         Player       @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  templateId     String
+  template       HeroTemplate @relation(fields: [templateId], references: [id])
+  expeditionSlot ExpeditionHero?
+
+  @@map("heroes")
+}
+
+// ─── Expedition ───────────────────────────────────────────────────────────────
+
+model Expedition {
+  id           String   @id @default(cuid())
+  status       String   @default("active") // active | completed | failed
+  currentNodeId String?
+  // Pending loot (JSON) — lost on death
+  pendingLoot  Json     @default("{}")
+  startedAt    DateTime @default(now())
+  endedAt      DateTime?
+  updatedAt    DateTime @updatedAt
+
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  nodes   ExpeditionNode[]
+  heroes  ExpeditionHero[]
+  loot    ExpeditionLoot[]
+  combats Combat[]
+
+  @@map("expeditions")
+}
+
+model ExpeditionNode {
+  id          String  @id @default(cuid())
+  type        String  // NodeType enum value
+  visited     Boolean @default(false)
+  connections Json    @default("[]") // string[] of node IDs
+  posX        Float   @default(0)
+  posY        Float   @default(0)
+  // Optional loot config stored as JSON
+  lootConfig  Json?
+
+  expeditionId String
+  expedition   Expedition @relation(fields: [expeditionId], references: [id], onDelete: Cascade)
+
+  @@map("expedition_nodes")
+}
+
+model ExpeditionHero {
+  id String @id @default(cuid())
+
+  expeditionId String
+  expedition   Expedition @relation(fields: [expeditionId], references: [id], onDelete: Cascade)
+  heroId       String     @unique
+  hero         Hero       @relation(fields: [heroId], references: [id], onDelete: Cascade)
+
+  @@map("expedition_heroes")
+}
+
+model ExpeditionLoot {
+  id           String   @id @default(cuid())
+  resourceType String
+  amount       Int
+  collectedAt  DateTime @default(now())
+
+  expeditionId String
+  expedition   Expedition @relation(fields: [expeditionId], references: [id], onDelete: Cascade)
+
+  @@map("expedition_loot")
+}
+
+// ─── Combat ──────────────────────────────────────────────────────────────────
+
+model Combat {
+  id       String @id @default(cuid())
+  status   String @default("active") // CombatStatus
+  turn     Int    @default(1)
+  log      Json   @default("[]") // CombatLogEntry[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  expeditionId String
+  expedition   Expedition @relation(fields: [expeditionId], references: [id], onDelete: Cascade)
+  nodeId       String?
+
+  participants CombatParticipant[]
+
+  @@map("combats")
+}
+
+model CombatParticipant {
+  id       String  @id @default(cuid())
+  type     String  // 'hero' | 'enemy'
+  name     String
+  hp       Int
+  maxHp    Int
+  attack   Int
+  defense  Int
+  speed    Int
+  isAlive  Boolean @default(true)
+  heroId   String?
+
+  combatId String
+  combat   Combat @relation(fields: [combatId], references: [id], onDelete: Cascade)
+
+  @@map("combat_participants")
+}
