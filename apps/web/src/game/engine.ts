@@ -21,11 +21,10 @@ import type { SaveState, HeroSave, ExpeditionSave, CombatSave, MetaSave } from '
 import { SAVE_VERSION, metaOf } from './state.js';
 import { generateLabyrinth } from './labyrinth.js';
 import {
-  generateEnemy,
+  generateEnemyGroup,
   processCombatAction,
   applyUpdates,
   evaluateOutcome,
-  getActiveParticipantId,
 } from './combat.js';
 import { loadLocal, saveLocal, loadCloudMeta, saveCloudMeta } from './storage.js';
 
@@ -134,11 +133,17 @@ function expeditionToDTO(e: ExpeditionSave): ExpeditionDTO {
 }
 
 function combatToDTO(c: CombatSave): CombatDTO {
+  // Next hero in the queue is the active participant for the UI
+  const activeParticipantId =
+    c.turnQueue.find(id => {
+      const p = c.participants.find(x => x.id === id);
+      return p && p.isAlive && p.type === 'hero';
+    }) ?? '';
   return {
     id: c.id,
     status: c.status,
     turn: c.turn,
-    activeParticipantId: getActiveParticipantId(c.participants),
+    activeParticipantId,
     participants: c.participants,
     log: c.log,
   };
@@ -179,6 +184,42 @@ class GameEngine {
 
   private bldLevel(type: string): number {
     return this.save.buildings.find((b) => b.type === type)?.level ?? 1;
+  }
+
+  private processEnemyTurns(c: CombatSave): void {
+    while (c.status === 'active') {
+      // Drop dead participants from queue
+      c.turnQueue = c.turnQueue.filter(id => c.participants.find(p => p.id === id && p.isAlive));
+
+      // Refill for new round when empty
+      if (c.turnQueue.length === 0) {
+        c.turnQueue = [...c.participants]
+          .filter(p => p.isAlive)
+          .sort((a, b) => b.speed - a.speed)
+          .map(p => p.id);
+      }
+
+      const nextId = c.turnQueue[0];
+      const next = c.participants.find(p => p.id === nextId);
+      // Stop if next actor is a hero (player's turn)
+      if (!next || !next.isAlive || next.type === 'hero') break;
+
+      c.turnQueue.shift();
+
+      // Enemy targets the lowest-HP living hero
+      const heroTarget = [...c.participants]
+        .filter(p => p.type === 'hero' && p.isAlive)
+        .sort((a, b) => a.hp - b.hp)[0];
+      if (!heroTarget) break;
+
+      const { updatedParticipants, newLog } = processCombatAction(
+        c.participants, c.turn, 'attack', heroTarget.id, next.id,
+      );
+      applyUpdates(c.participants, updatedParticipants);
+      c.log = [...c.log, ...newLog];
+      c.turn += 1;
+      c.status = evaluateOutcome(c.participants);
+    }
   }
 
   /** Loads (or creates) the save, reconciling local and cloud copies. */
@@ -376,15 +417,15 @@ class GameEngine {
     const e = this.save.expedition!;
     const nodeIndex = e.nodes.findIndex((n) => n.id === nodeId);
     const heroes = this.save.heroes.filter((h) => e.heroIds.includes(h.id) && h.isAlive);
-
     const forge = this.bldLevel('forge');
+
     const heroParticipants: CombatParticipantDTO[] = heroes.map((h) => {
       const stats = heroStats(h, forge);
       return {
         id: newId('cp'),
         type: 'hero',
         name: h.name,
-        hp: stats.maxHp, // heroes enter each fight at full HP (matches server)
+        hp: stats.maxHp,
         maxHp: stats.maxHp,
         attack: stats.attack,
         defense: stats.defense,
@@ -395,8 +436,24 @@ class GameEngine {
       };
     });
 
-    const enemy = generateEnemy(nodeIndex);
-    const enemyParticipant: CombatParticipantDTO = { id: newId('cp'), ...enemy };
+    const enemyGroup = generateEnemyGroup(nodeIndex);
+    const enemyParticipants: CombatParticipantDTO[] = enemyGroup.map((enemy) => ({
+      id: newId('cp'),
+      type: 'enemy',
+      name: enemy.name,
+      hp: enemy.hp,
+      maxHp: enemy.maxHp,
+      attack: enemy.attack,
+      defense: enemy.defense,
+      speed: enemy.speed,
+      isAlive: true,
+      enemyImage: enemy.image,
+    }));
+
+    const allParticipants = [...heroParticipants, ...enemyParticipants];
+    const turnQueue = [...allParticipants]
+      .sort((a, b) => b.speed - a.speed)
+      .map(p => p.id);
 
     const combat: CombatSave = {
       id: newId('combat'),
@@ -404,10 +461,15 @@ class GameEngine {
       nodeId,
       status: 'active',
       turn: 1,
-      participants: [...heroParticipants, enemyParticipant],
+      participants: allParticipants,
       log: [],
+      turnQueue,
     };
     this.save.combat = combat;
+
+    // If any enemy is faster than all heroes, they act first (preemptive)
+    this.processEnemyTurns(combat);
+
     return combat.id;
   }
 
@@ -416,57 +478,65 @@ class GameEngine {
     if (!c) throw new Error('Combat not found');
     if (c.status !== 'active') throw new Error('Combat is not active');
 
-    const actorId = getActiveParticipantId(c.participants);
-    if (!actorId) throw new Error('No active participant');
+    // Clean up dead participants from queue and refill if empty
+    c.turnQueue = c.turnQueue.filter(id => c.participants.find(p => p.id === id && p.isAlive));
+    if (c.turnQueue.length === 0) {
+      c.turnQueue = [...c.participants]
+        .filter(p => p.isAlive)
+        .sort((a, b) => b.speed - a.speed)
+        .map(p => p.id);
+    }
 
-    const { updatedParticipants, newLog } = processCombatAction(c.participants, c.turn, action, targetId, actorId);
+    const actorId = c.turnQueue[0];
+    if (!actorId) throw new Error('No active participant');
+    const actor = c.participants.find(p => p.id === actorId);
+    if (!actor || actor.type !== 'hero') throw new Error('Not a hero turn');
+
+    c.turnQueue.shift(); // Hero has acted
+
+    const { updatedParticipants, newLog } = processCombatAction(
+      c.participants, c.turn, action, targetId, actorId,
+    );
     applyUpdates(c.participants, updatedParticipants);
     c.log = [...c.log, ...newLog];
     c.turn += 1;
     c.status = evaluateOutcome(c.participants);
 
+    // Auto-process any enemy turns (and start of next round) until next hero
+    if (c.status === 'active') {
+      this.processEnemyTurns(c);
+    }
+
     const result = combatToDTO(c);
 
     if (c.status === 'defeat') {
-      const e = this.save.expedition;
-      if (e) {
-        // Barracks reduces the recovery timer.
+      const exp = this.save.expedition;
+      if (exp) {
         const barracks = this.bldLevel('barracks');
         const reviveMs = REVIVE_TIME_MS * Math.max(0.2, 1 - (barracks - 1) * 0.2);
-        for (const id of e.heroIds) {
+        for (const id of exp.heroIds) {
           const h = this.save.heroes.find((x) => x.id === id);
-          if (h) {
-            h.hp = 0;
-            h.isAlive = false;
-            h.reviveAt = Date.now() + reviveMs;
-          }
+          if (h) { h.hp = 0; h.isAlive = false; h.reviveAt = Date.now() + reviveMs; }
         }
       }
       this.save.expedition = null;
       this.save.combat = null;
     } else if (c.status === 'victory') {
-      // Award XP to surviving heroes; Laboratory multiplies the gain.
-      const e = this.save.expedition;
-      if (e) {
-        const nodeIndex = e.nodes.findIndex((n) => n.id === c.nodeId);
+      const exp = this.save.expedition;
+      if (exp) {
+        const nodeIndex = exp.nodes.findIndex((n) => n.id === c.nodeId);
         const tier = Math.floor(Math.max(0, nodeIndex) / 3) + 1;
         const lab = this.bldLevel('laboratory');
         const xpMultiplier = 1 + (lab - 1) * 0.2;
         const xpGained = Math.round(XP_PER_TIER * tier * xpMultiplier);
-
-        for (const id of e.heroIds) {
+        for (const id of exp.heroIds) {
           const h = this.save.heroes.find((x) => x.id === id);
           if (!h || !h.isAlive) continue;
           const survived = c.participants.some((p) => p.heroId === id && p.isAlive);
           if (!survived) continue;
-
           h.xp += xpGained;
           const threshold = XP_TO_LEVEL(h.level);
-          if (h.xp >= threshold) {
-            h.xp -= threshold;
-            h.level += 1;
-            h.hp = heroStats(h).maxHp;
-          }
+          if (h.xp >= threshold) { h.xp -= threshold; h.level += 1; h.hp = heroStats(h).maxHp; }
         }
       }
       this.save.combat = null;

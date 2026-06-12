@@ -42,6 +42,7 @@ export interface CombatSave {
   turn: number;
   participants: CombatParticipantDTO[];
   log: CombatLogEntry[];
+  turnQueue: string[];
 }
 
 /** Permanent progress synced to Telegram CloudStorage across devices. */

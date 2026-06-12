@@ -13,6 +13,7 @@ export interface CombatParticipantDTO {
   isAlive: boolean;
   heroId?: string;
   heroClass?: string;
+  enemyImage?: string;
 }
 
 export interface CombatDTO {

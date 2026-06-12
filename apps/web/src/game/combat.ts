@@ -8,6 +8,7 @@ import type { CombatParticipantDTO, CombatActionType, CombatLogEntry, CombatStat
 export interface EnemyTemplate {
   type: 'enemy';
   name: string;
+  image: string;
   hp: number;
   maxHp: number;
   attack: number;
@@ -16,29 +17,50 @@ export interface EnemyTemplate {
   isAlive: true;
 }
 
-/** Generates a single PvE enemy scaled by how deep the node is. */
+const ENEMY_TYPES = [
+  { name: 'Skeleton Warrior', image: 'enemies/skeleton_warrior.png', hp: 90, attack: 14, defense: 16, speed: 4 },
+  { name: 'Skeleton Archer',  image: 'enemies/skeleton_archer.png',  hp: 60, attack: 18, defense: 6,  speed: 11 },
+  { name: 'Skeleton Mage',    image: 'enemies/skeleton_mage.png',    hp: 45, attack: 24, defense: 3,  speed: 9  },
+];
+
 export function generateEnemy(nodeIndex: number): EnemyTemplate {
   const tier = Math.floor(nodeIndex / 3) + 1;
-  const enemyTypes = [
-    { name: 'Labyrinth Rat', hp: 30, attack: 8, defense: 3, speed: 7 },
-    { name: 'Stone Golem', hp: 80, attack: 12, defense: 15, speed: 3 },
-    { name: 'Shadow Wraith', hp: 55, attack: 20, defense: 5, speed: 11 },
-    { name: 'Minotaur Guard', hp: 100, attack: 18, defense: 12, speed: 6 },
-  ];
-
-  const base = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
-  const multiplier = 1 + (tier - 1) * 0.2;
-
+  const base = ENEMY_TYPES[Math.floor(Math.random() * ENEMY_TYPES.length)];
+  const m = 1 + (tier - 1) * 0.2;
   return {
     type: 'enemy',
     name: base.name,
-    hp: Math.round(base.hp * multiplier),
-    maxHp: Math.round(base.hp * multiplier),
-    attack: Math.round(base.attack * multiplier),
-    defense: Math.round(base.defense * multiplier),
+    image: base.image,
+    hp: Math.round(base.hp * m),
+    maxHp: Math.round(base.hp * m),
+    attack: Math.round(base.attack * m),
+    defense: Math.round(base.defense * m),
     speed: base.speed,
     isAlive: true,
   };
+}
+
+export function generateEnemyGroup(nodeIndex: number): EnemyTemplate[] {
+  const tier = Math.floor(nodeIndex / 3) + 1;
+  const count =
+    tier === 1 ? 1 :
+    tier === 2 ? (Math.random() < 0.5 ? 1 : 2) :
+    tier === 3 ? 2 :
+    (Math.random() < 0.4 ? 2 : 3);
+
+  const group = Array.from({ length: count }, () => generateEnemy(nodeIndex));
+
+  // Add numeric suffix when multiple enemies share the same type
+  const seen: Record<string, number> = {};
+  for (const e of group) seen[e.name] = (seen[e.name] ?? 0) + 1;
+  const used: Record<string, number> = {};
+  for (const e of group) {
+    if (seen[e.name] > 1) {
+      used[e.name] = (used[e.name] ?? 0) + 1;
+      e.name = `${e.name} ${used[e.name]}`;
+    }
+  }
+  return group;
 }
 
 type Update = Partial<CombatParticipantDTO> & { id: string };
@@ -97,44 +119,6 @@ export function processCombatAction(
       actorName: actor.name,
       action: 'defend',
       message: `${actor.name} takes a defensive stance.`,
-    });
-  }
-
-  // Enemy AI: every living enemy retaliates against a living hero.
-  const enemies = participants.filter((p) => p.type === 'enemy' && p.isAlive);
-  for (const enemy of enemies) {
-    const wasKilled = updatedParticipants.find((u) => u.id === enemy.id && u.isAlive === false);
-    if (wasKilled) continue;
-
-    const heroTarget = participants.find(
-      (p) => p.type === 'hero' && p.isAlive && !updatedParticipants.find((u) => u.id === p.id && u.isAlive === false),
-    );
-    if (!heroTarget) continue;
-
-    const rawDamage = Math.max(1, enemy.attack - Math.floor(heroTarget.defense / 2));
-    const damage = rawDamage + Math.floor(Math.random() * 3);
-    const newHp = Math.max(0, heroTarget.hp - damage);
-    const died = newHp <= 0;
-
-    const existing = updatedParticipants.find((u) => u.id === heroTarget.id);
-    if (existing) {
-      existing.hp = Math.max(0, (existing.hp ?? heroTarget.hp) - damage);
-      existing.isAlive = (existing.hp ?? 0) > 0;
-    } else {
-      updatedParticipants.push({ id: heroTarget.id, hp: newHp, isAlive: !died });
-    }
-
-    newLog.push({
-      turn,
-      actorId: enemy.id,
-      actorName: enemy.name,
-      action: 'attack',
-      targetId: heroTarget.id,
-      targetName: heroTarget.name,
-      damage,
-      message: died
-        ? `${enemy.name} strikes ${heroTarget.name} for ${damage}. ${heroTarget.name} falls!`
-        : `${enemy.name} strikes ${heroTarget.name} for ${damage}. (${newHp}/${heroTarget.maxHp} HP remaining)`,
     });
   }
 
@@ -278,7 +262,3 @@ export function evaluateOutcome(participants: CombatParticipantDTO[]): CombatSta
   return 'active';
 }
 
-/** First living hero acts; mirrors the server's simplified turn model. */
-export function getActiveParticipantId(participants: CombatParticipantDTO[]): string {
-  return participants.find((p) => p.isAlive && p.type === 'hero')?.id ?? '';
-}
