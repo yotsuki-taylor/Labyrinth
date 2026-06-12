@@ -47,7 +47,6 @@ function migrateSave(raw: Record<string, any>): void {
     for (const h of raw.heroes ?? []) {
       if (renames[h.class]) h.class = renames[h.class];
     }
-    // Add heroes that should have been unlocked by current barracks level
     const barracksLevel = (raw.buildings ?? []).find((b: any) => b.type === 'barracks')?.level ?? 1;
     const existingClasses = new Set((raw.heroes ?? []).map((h: any) => h.class));
     for (const [lvlStr, pool] of Object.entries(BARRACKS_UNLOCKS)) {
@@ -55,13 +54,8 @@ function migrateSave(raw: Record<string, any>): void {
         for (const { class: cls, name } of pool) {
           if (!existingClasses.has(cls)) {
             raw.heroes.push({
-              id: newId('hero'),
-              name,
-              class: cls,
-              level: 1,
-              xp: 0,
-              hp: HERO_TEMPLATES[cls as HeroClass].baseStats.maxHp,
-              isAlive: true,
+              id: newId('hero'), name, class: cls, level: 1, xp: 0,
+              hp: HERO_TEMPLATES[cls as HeroClass].baseStats.maxHp, isAlive: true,
             });
             existingClasses.add(cls);
           }
@@ -69,6 +63,12 @@ function migrateSave(raw: Record<string, any>): void {
       }
     }
     raw.version = 2;
+  }
+  // v2 → v3: new fixed-topology labyrinth (clear any active expedition)
+  if (raw.version === 2) {
+    raw.expedition = null;
+    raw.combat = null;
+    raw.version = 3;
   }
 }
 
@@ -346,7 +346,7 @@ class GameEngine {
   // --- Expedition ---
 
   async startExpedition(heroIds: string[]): Promise<ExpeditionDTO> {
-    if (!heroIds || heroIds.length === 0) throw new Error('Select at least one hero');
+    if (!heroIds || heroIds.length !== 1) throw new Error('Select exactly one hero');
 
     const valid = heroIds.filter((id) => this.save.heroes.some((h) => h.id === id && h.isAlive && h.hp > 0));
     if (valid.length !== heroIds.length) throw new Error('Invalid or dead heroes selected');

@@ -1,55 +1,53 @@
 import type { ExpeditionNodeDTO, NodeType, ResourceMap } from '@labyrinth/shared';
 
 /**
- * Browser port of the former server-side labyrinth generator.
- * Produces a graph of 10–15 nodes: start → branching paths → exit.
+ * Generates a fixed 8-node Y-shaped labyrinth matching the isometric scene layout.
+ *
+ * Topology:
+ *   node_0 (start) → node_1 → node_2 (combat) → node_3 (junction)
+ *   node_3 → node_4 → node_6 (exit_left)
+ *   node_3 → node_5 → node_7 (exit_right)
+ *
+ * x/y are tile coordinates used by the isometric scene zone definitions.
  */
 export function generateLabyrinth(mapRoomLevel = 1): ExpeditionNodeDTO[] {
-  const nodeCount = 10 + Math.min(mapRoomLevel - 1, 5); // 10–15 nodes
-  const nodes: ExpeditionNodeDTO[] = [];
+  const lootChance = Math.min(0.5, 0.3 + (mapRoomLevel - 1) * 0.05);
 
-  // Map Room increases loot node density: +4% per level above 1.
-  const lootChance = Math.min(0.45, 0.25 + (mapRoomLevel - 1) * 0.04);
-
-  for (let i = 0; i < nodeCount; i++) {
-    let type: NodeType;
-    if (i === 0) {
-      type = 'start';
-    } else if (i === nodeCount - 1) {
-      type = 'exit';
-    } else {
-      const roll = Math.random();
-      if (roll < lootChance) type = 'loot';
-      else if (roll < lootChance + 0.30) type = 'pve_combat';
-      else type = 'empty';
-    }
-
-    nodes.push({
-      id: `node_${i}`,
-      type,
-      // The start node counts as already visited (you spawn there).
-      visited: type === 'start',
-      connections: [],
-      x: Math.round(Math.random() * 600 + 50),
-      y: Math.round(Math.random() * 400 + 50),
-      loot: type === 'loot' ? generateLoot() : undefined,
-    });
+  function roll(): NodeType {
+    const r = Math.random();
+    if (r < lootChance) return 'loot';
+    if (r < lootChance + 0.40) return 'pve_combat';
+    return 'empty';
   }
 
-  // Main chain guarantees a start→exit path exists.
-  for (let i = 0; i < nodeCount - 1; i++) {
-    connect(nodes[i], nodes[i + 1]);
+  const nodes: ExpeditionNodeDTO[] = [
+    mk('node_0', 'start',      5, 12, true), // spawn
+    mk('node_1', roll(),       5,  8),       // first room (loot / combat / empty)
+    mk('node_2', 'pve_combat', 5,  6),       // main combat (always)
+    mk('node_3', 'empty',      5,  3),       // junction crossroads
+    mk('node_4', roll(),       3,  1),       // left branch
+    mk('node_5', roll(),       7,  1),       // right branch
+    mk('node_6', 'exit',       3,  0),       // exit left
+    mk('node_7', 'exit',       7,  0),       // exit right
+  ];
+
+  for (const n of nodes) {
+    if (n.type === 'loot') n.loot = generateLoot();
   }
 
-  // A few extra edges for branching.
-  const extraEdges = Math.floor(nodeCount * 0.3);
-  for (let k = 0; k < extraEdges; k++) {
-    const a = Math.floor(Math.random() * (nodeCount - 2));
-    const b = a + 2 + Math.floor(Math.random() * 3);
-    if (b < nodeCount) connect(nodes[a], nodes[b]);
-  }
+  connect(nodes[0], nodes[1]);
+  connect(nodes[1], nodes[2]);
+  connect(nodes[2], nodes[3]);
+  connect(nodes[3], nodes[4]);
+  connect(nodes[3], nodes[5]);
+  connect(nodes[4], nodes[6]);
+  connect(nodes[5], nodes[7]);
 
   return nodes;
+}
+
+function mk(id: string, type: NodeType, x: number, y: number, visited = false): ExpeditionNodeDTO {
+  return { id, type, visited, connections: [], x, y, loot: undefined };
 }
 
 function connect(a: ExpeditionNodeDTO, b: ExpeditionNodeDTO) {
@@ -59,14 +57,14 @@ function connect(a: ExpeditionNodeDTO, b: ExpeditionNodeDTO) {
 
 function generateLoot(): Partial<ResourceMap> {
   return {
-    gold: roll(10, 50),
-    stone: Math.random() > 0.5 ? roll(5, 20) : 0,
-    iron: Math.random() > 0.7 ? roll(5, 15) : 0,
-    essence: Math.random() > 0.85 ? roll(1, 5) : 0,
+    gold: roll2(10, 50),
+    stone: Math.random() > 0.5 ? roll2(5, 20) : 0,
+    iron: Math.random() > 0.7 ? roll2(5, 15) : 0,
+    essence: Math.random() > 0.85 ? roll2(1, 5) : 0,
     relics: Math.random() > 0.95 ? 1 : 0,
   };
 }
 
-function roll(min: number, max: number): number {
+function roll2(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }

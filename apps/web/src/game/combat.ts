@@ -44,9 +44,7 @@ export function generateEnemyGroup(nodeIndex: number): EnemyTemplate[] {
   const tier = Math.floor(nodeIndex / 3) + 1;
   const count =
     tier === 1 ? 1 :
-    tier === 2 ? (Math.random() < 0.5 ? 1 : 2) :
-    tier === 3 ? 2 :
-    (Math.random() < 0.4 ? 2 : 3);
+    (Math.random() < 0.5 ? 1 : 2); // max 2 for solo hero balance
 
   const group = Array.from({ length: count }, () => generateEnemy(nodeIndex));
 
