@@ -30,8 +30,9 @@ export function LabyrinthRunScreen() {
   const busyRef      = useRef(false);
   const rafRef       = useRef(0);
   const lastTRef     = useRef(0);
-  const heroImgRef   = useRef<HTMLImageElement | null>(null);
+  const heroImgRef    = useRef<HTMLImageElement | null>(null);
   const heroLoadedRef = useRef(false);
+  const cameraRef     = useRef({ x: 0, y: 0 });
 
   // Keep a live ref to the expedition for the rAF loop.
   useEffect(() => { expRef.current = expedition; }, [expedition]);
@@ -55,6 +56,7 @@ export function LabyrinthRunScreen() {
     if (!expedition) return;
     const { width, height } = expedition.room;
     playerRef.current = { x: (width - 1) / 2, y: height - 1 };
+    cameraRef.current = { x: (width - 1) / 2, y: height - 1 };
     collectedRef.current = new Set(
       expedition.room.pickups.filter((p) => p.collected).map((p) => p.id),
     );
@@ -93,20 +95,15 @@ export function LabyrinthRunScreen() {
 
     const { width: RW, height: RH } = expedition.room;
 
-    // Frame the whole room statically (no scrolling): fit it to the viewport.
-    const span = (RW - 1) + (RH - 1);
-    const twFit = (W * 0.92) / Math.max(1, span);
-    const thFit = (H * 0.62) / Math.max(1, span); // TH = TW/2 ⇒ compare against half
-    const TW = Math.max(22, Math.min(64, Math.min(twFit, thFit * 2)));
+    // Large fixed tile size — camera follows the player (no full-room fit).
+    const TW = 180;
     const TH = TW / 2;
-    const camX = (RW - 1) / 2;
-    const camY = (RH - 1) / 2;
-    const ANCHOR_Y = H * 0.46;
 
     function toScreen(tx: number, ty: number) {
+      const cam = cameraRef.current;
       return {
-        sx: (tx - ty - (camX - camY)) * (TW / 2) + W / 2,
-        sy: (tx + ty - (camX + camY)) * (TH / 2) + ANCHOR_Y,
+        sx: (tx - ty - (cam.x - cam.y)) * (TW / 2) + W / 2,
+        sy: (tx + ty - (cam.x + cam.y)) * (TH / 2) + H * 0.55,
       };
     }
 
@@ -141,6 +138,7 @@ export function LabyrinthRunScreen() {
           const row = sum - col;
           if (row < 0 || row >= RH) continue;
           const { sx, sy } = toScreen(col, row);
+          if (sx < -TW || sx > W + TW || sy < -TH * 2 || sy > H + TH * 2) continue;
           const g = ctx.createLinearGradient(sx, sy, sx, sy + TH);
           g.addColorStop(0, '#3c3c5a');
           g.addColorStop(0.6, '#2a2a42');
@@ -335,6 +333,12 @@ export function LabyrinthRunScreen() {
         }
         if (canY) p.y = ny;
       }
+
+      // Smooth camera follow
+      const cam = cameraRef.current;
+      const lerp = Math.min(1, 8 * dt);
+      cam.x += (p.x - cam.x) * lerp;
+      cam.y += (p.y - cam.y) * lerp;
 
       // Pickup collection
       if (!busyRef.current && exp) {
