@@ -2,14 +2,14 @@ import type {
   ResourceMap,
   BuildingDTO,
   HeroClass,
-  ExpeditionNodeDTO,
+  ExpeditionRoomDTO,
   ExpeditionStatus,
   CombatParticipantDTO,
   CombatLogEntry,
   CombatStatus,
 } from '@labyrinth/shared';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 4;
 
 /** A hero as persisted. Display stats are derived from class + level. */
 export interface HeroSave {
@@ -18,17 +18,20 @@ export interface HeroSave {
   class: HeroClass;
   level: number;
   xp: number;
-  hp: number; // current HP; 0 means dead (permadeath, matching server)
+  hp: number; // current HP; 0 means dead
   isAlive: boolean;
+  /** Unix timestamp (ms) when the hero auto-revives after death. */
+  reviveAt?: number;
 }
 
 export interface ExpeditionSave {
   id: string;
   status: ExpeditionStatus;
-  currentNodeId: string;
   startedAt: string;
-  heroIds: string[];
-  nodes: ExpeditionNodeDTO[];
+  heroId: string;
+  depth: number;
+  maxDepth: number;
+  room: ExpeditionRoomDTO;
   pendingLoot: Partial<ResourceMap>;
 }
 
@@ -40,6 +43,7 @@ export interface CombatSave {
   turn: number;
   participants: CombatParticipantDTO[];
   log: CombatLogEntry[];
+  turnQueue: string[];
 }
 
 /** Permanent progress synced to Telegram CloudStorage across devices. */

@@ -41,10 +41,11 @@ interface GameState {
   loadPlayerState: () => Promise<void>;
   upgradeBuilding: (buildingType: string) => Promise<void>;
   startExpedition: (heroIds: string[]) => Promise<void>;
-  moveToNode: (targetNodeId: string) => Promise<void>;
+  collectPickup: (pickupId: string) => Promise<void>;
+  enterExit: (exitId: string) => Promise<void>;
   performCombatAction: (action: string, targetId?: string) => Promise<void>;
-  extract: () => Promise<void>;
   refreshCombat: (combatId: string) => Promise<void>;
+  reviveHero: (heroId: string) => Promise<void>;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -89,6 +90,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       const result = await engine.upgradeBuilding(buildingType);
       set((s) => ({
         resources: result.resources,
+        heroes: result.heroes,
         buildings: s.buildings.map((b) =>
           b.type === buildingType ? result.building : b,
         ),
@@ -112,19 +114,33 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  moveToNode: async (targetNodeId) => {
+  // Collecting a pickup is a high-frequency action; keep it light (no global loading).
+  collectPickup: async (pickupId) => {
+    const { expedition } = get();
+    if (!expedition) return;
+    try {
+      const result = await engine.collectPickup(pickupId);
+      set({ expedition: result.expedition });
+    } catch (e) {
+      set({ error: (e as Error).message });
+    }
+  },
+
+  enterExit: async (exitId) => {
     const { expedition } = get();
     if (!expedition) return;
     set({ loading: true, error: null });
     try {
-      const result = await engine.move(targetNodeId);
-      set({ expedition: result.expedition });
-
-      if (result.event === 'combat_started' && result.combatId) {
-        const combat = engine.getCombat(result.combatId);
-        set({ combat, screen: 'combat' });
-      } else if (result.event === 'exited') {
-        set({ screen: 'labyrinth_run' }); // Will show extract button
+      const result = await engine.enterExit(exitId);
+      if (result.extracted && result.extract) {
+        set({
+          expedition: null,
+          screen: 'results',
+          lastResult: { success: result.extract.success, loot: result.extract.lootGained, message: result.extract.message },
+        });
+        await get().loadPlayerState();
+      } else {
+        set({ expedition: result.expedition });
       }
     } catch (e) {
       set({ error: (e as Error).message });
@@ -143,13 +159,14 @@ export const useGameStore = create<GameState>((set, get) => ({
 
       if (result.combat.status === 'victory') {
         const expedition = engine.getCurrentExpedition();
-        set({ expedition, screen: 'labyrinth_run', combat: null });
+        const state = engine.getState();
+        set({ expedition, screen: 'labyrinth_run', combat: null, heroes: state.heroes, resources: state.resources });
       } else if (result.combat.status === 'defeat') {
         set({
           screen: 'results',
           combat: null,
           expedition: null,
-          lastResult: { success: false, loot: {}, message: 'Your party was defeated. All loot lost.' },
+          lastResult: { success: false, loot: {}, message: 'Your hero fell in the labyrinth. All loot lost.' },
         });
         await get().loadPlayerState();
       }
@@ -160,27 +177,20 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  extract: async () => {
-    const { expedition } = get();
-    if (!expedition) return;
+  refreshCombat: async (combatId) => {
+    const combat = engine.getCombat(combatId);
+    set({ combat });
+  },
+
+  reviveHero: async (heroId) => {
     set({ loading: true, error: null });
     try {
-      const result = await engine.extract();
-      set({
-        screen: 'results',
-        expedition: null,
-        lastResult: { success: result.success, loot: result.lootGained, message: result.message },
-      });
-      await get().loadPlayerState();
+      const result = await engine.reviveHero(heroId);
+      set({ heroes: result.heroes, resources: result.resources });
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
       set({ loading: false });
     }
-  },
-
-  refreshCombat: async (combatId) => {
-    const combat = engine.getCombat(combatId);
-    set({ combat });
   },
 }));

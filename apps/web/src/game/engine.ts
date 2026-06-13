@@ -12,28 +12,67 @@ import type {
   HeroClass,
   BuildingDTO,
   ExpeditionDTO,
+  ExpeditionRoomDTO,
+  ExtractResult,
   CombatDTO,
-  CombatParticipantDTO,
   CombatActionType,
   ResourceType,
 } from '@labyrinth/shared';
-import type { SaveState, HeroSave, ExpeditionSave, CombatSave } from './state.js';
+import type { SaveState, HeroSave, ExpeditionSave, CombatSave, MetaSave } from './state.js';
 import { SAVE_VERSION, metaOf } from './state.js';
-import { generateLabyrinth } from './labyrinth.js';
-import {
-  generateEnemy,
-  processCombatAction,
-  applyUpdates,
-  evaluateOutcome,
-  getActiveParticipantId,
-} from './combat.js';
+import { generateRoom, generateStartRoom, runDepth } from './labyrinth.js';
+import { processCombatAction, applyUpdates, evaluateOutcome } from './combat.js';
 import { loadLocal, saveLocal, loadCloudMeta, saveCloudMeta } from './storage.js';
 
+const XP_PER_ROOM = 20;
+const XP_TO_LEVEL = (level: number) => level * 100;
+const REVIVE_TIME_MS = 60 * 60 * 1000; // 1 hour
+export const REVIVE_GOLD_COST = 100;
+
+export const BARRACKS_UNLOCKS: Record<number, { class: HeroClass; name: string }[]> = {
+  2: [{ class: 'assassin', name: 'Zara' }, { class: 'sorcerer', name: 'Ignis' }],
+  3: [{ class: 'paladin', name: 'Theron' }, { class: 'barbarian', name: 'Grak' }],
+  4: [{ class: 'druid', name: 'Willow' }, { class: 'bard', name: 'Lyric' }],
+  5: [{ class: 'alchemist', name: 'Vesper' }, { class: 'inventor', name: 'Cog' }],
+};
+
+function migrateSave(raw: Record<string, any>): void {
+  // v1 → v2: rename guardian/occultist/medic to warrior/warlock/cleric
+  if (raw.version === 1) {
+    const renames: Record<string, string> = { guardian: 'warrior', occultist: 'warlock', medic: 'cleric' };
+    for (const h of raw.heroes ?? []) {
+      if (renames[h.class]) h.class = renames[h.class];
+    }
+    const barracksLevel = (raw.buildings ?? []).find((b: any) => b.type === 'barracks')?.level ?? 1;
+    const existingClasses = new Set((raw.heroes ?? []).map((h: any) => h.class));
+    for (const [lvlStr, pool] of Object.entries(BARRACKS_UNLOCKS)) {
+      if (barracksLevel >= Number(lvlStr)) {
+        for (const { class: cls, name } of pool) {
+          if (!existingClasses.has(cls)) {
+            raw.heroes.push({
+              id: newId('hero'), name, class: cls, level: 1, xp: 0,
+              hp: HERO_TEMPLATES[cls as HeroClass].baseStats.maxHp, isAlive: true,
+            });
+            existingClasses.add(cls);
+          }
+        }
+      }
+    }
+    raw.version = 2;
+  }
+  // v2 → v3 and v3 → v4: expedition model changed; clear any in-progress run.
+  if (raw.version === 2 || raw.version === 3) {
+    raw.expedition = null;
+    raw.combat = null;
+    raw.version = 4;
+  }
+}
+
 const STARTER_HEROES: { class: HeroClass; name: string }[] = [
-  { class: 'guardian', name: 'Aldric' },
+  { class: 'warrior', name: 'Aldric' },
   { class: 'ranger', name: 'Sylva' },
-  { class: 'occultist', name: 'Morvyn' },
-  { class: 'medic', name: 'Eryn' },
+  { class: 'warlock', name: 'Morvyn' },
+  { class: 'cleric', name: 'Eryn' },
 ];
 
 function newId(prefix: string): string {
@@ -49,40 +88,58 @@ function telegramUsername(): string {
   return u?.username ?? u?.first_name ?? 'Adventurer';
 }
 
-/** Derives display stats from a hero's class and level (matches old server math). */
-function heroStats(h: HeroSave): HeroStats {
+/** Derives display stats from a hero's class and level. forgeLevel applies equipment bonus. */
+function heroStats(h: HeroSave, forgeLevel = 1): HeroStats {
   const base = HERO_TEMPLATES[h.class].baseStats;
+  const forgeBonus = (forgeLevel - 1) * 3;
   return {
     hp: h.hp,
     maxHp: base.maxHp + (h.level - 1) * 10,
-    attack: base.attack + (h.level - 1) * 2,
-    defense: base.defense + (h.level - 1) * 1,
+    attack: base.attack + (h.level - 1) * 2 + forgeBonus,
+    defense: base.defense + (h.level - 1) * 1 + forgeBonus,
     speed: base.speed,
   };
 }
 
-function heroToDTO(h: HeroSave): HeroDTO {
-  return { id: h.id, name: h.name, class: h.class, level: h.level, xp: h.xp, stats: heroStats(h) };
+const STORAGE_CAPS = [1000, 2000, 5000, 10000, Infinity];
+
+function heroToDTO(h: HeroSave, forgeLevel = 1): HeroDTO {
+  return {
+    id: h.id,
+    name: h.name,
+    class: h.class,
+    level: h.level,
+    xp: h.xp,
+    isAlive: h.isAlive,
+    reviveAt: h.reviveAt,
+    stats: heroStats(h, forgeLevel),
+  };
 }
 
 function expeditionToDTO(e: ExpeditionSave): ExpeditionDTO {
   return {
     id: e.id,
     status: e.status,
-    currentNodeId: e.currentNodeId,
-    nodes: e.nodes,
-    heroIds: e.heroIds,
+    heroId: e.heroId,
+    room: e.room,
     pendingLoot: e.pendingLoot,
+    depth: e.depth,
+    maxDepth: e.maxDepth,
     startedAt: e.startedAt,
   };
 }
 
 function combatToDTO(c: CombatSave): CombatDTO {
+  const activeParticipantId =
+    c.turnQueue.find(id => {
+      const p = c.participants.find(x => x.id === id);
+      return p && p.isAlive && p.type === 'hero';
+    }) ?? '';
   return {
     id: c.id,
     status: c.status,
     turn: c.turn,
-    activeParticipantId: getActiveParticipantId(c.participants),
+    activeParticipantId,
     participants: c.participants,
     log: c.log,
   };
@@ -121,26 +178,60 @@ class GameEngine {
   private save: SaveState = createNewSave();
   private ready = false;
 
+  private bldLevel(type: string): number {
+    return this.save.buildings.find((b) => b.type === type)?.level ?? 1;
+  }
+
+  /** Auto-runs enemy (and round-start) turns until it's a hero's turn again. */
+  private processEnemyTurns(c: CombatSave): void {
+    while (c.status === 'active') {
+      c.turnQueue = c.turnQueue.filter(id => c.participants.find(p => p.id === id && p.isAlive));
+      if (c.turnQueue.length === 0) {
+        c.turnQueue = [...c.participants]
+          .filter(p => p.isAlive)
+          .sort((a, b) => b.speed - a.speed)
+          .map(p => p.id);
+      }
+      const next = c.participants.find(p => p.id === c.turnQueue[0]);
+      if (!next || !next.isAlive || next.type === 'hero') break;
+      c.turnQueue.shift();
+
+      const heroTarget = [...c.participants]
+        .filter(p => p.type === 'hero' && p.isAlive)
+        .sort((a, b) => a.hp - b.hp)[0];
+      if (!heroTarget) break;
+
+      const { updatedParticipants, newLog } = processCombatAction(
+        c.participants, c.turn, 'attack', heroTarget.id, next.id,
+      );
+      applyUpdates(c.participants, updatedParticipants);
+      c.log = [...c.log, ...newLog];
+      c.turn += 1;
+      c.status = evaluateOutcome(c.participants);
+    }
+  }
+
   /** Loads (or creates) the save, reconciling local and cloud copies. */
   async init(): Promise<void> {
     if (this.ready) return;
-    const local = loadLocal();
-    const cloudMeta = await loadCloudMeta();
+    const rawLocal = loadLocal() as any;
+    const rawCloud = await loadCloudMeta() as any;
 
-    const localValid = local && local.version === SAVE_VERSION ? local : null;
-    const cloudValid = cloudMeta && cloudMeta.version === SAVE_VERSION ? cloudMeta : null;
+    if (rawLocal) migrateSave(rawLocal);
+    if (rawCloud) migrateSave(rawCloud);
 
-    if (localValid && cloudValid) {
-      // Last write wins on permanent progress. A newer cloud copy means the
-      // player progressed on another device, so any stale local run is dropped.
+    const local = rawLocal && rawLocal.version === SAVE_VERSION ? rawLocal as SaveState : null;
+    const cloud = rawCloud && rawCloud.version === SAVE_VERSION ? rawCloud as MetaSave : null;
+
+    if (local && cloud) {
       this.save =
-        cloudValid.updatedAt > localValid.updatedAt
-          ? { ...cloudValid, expedition: null, combat: null }
-          : localValid;
-    } else if (cloudValid) {
-      this.save = { ...cloudValid, expedition: null, combat: null };
-    } else if (localValid) {
-      this.save = localValid;
+        cloud.updatedAt > local.updatedAt
+          ? { ...cloud, expedition: null, combat: null }
+          : local;
+    } else if (cloud) {
+      this.save = { ...cloud, expedition: null, combat: null };
+    } else if (local) {
+      this.save = local;
     } else {
       this.save = createNewSave();
     }
@@ -158,11 +249,25 @@ class GameEngine {
   // --- Reads ---
 
   getState() {
+    // Auto-revive heroes whose recovery timer has elapsed.
+    const now = Date.now();
+    let dirty = false;
+    for (const h of this.save.heroes) {
+      if (!h.isAlive && h.reviveAt !== undefined && now >= h.reviveAt) {
+        h.isAlive = true;
+        h.hp = heroStats(h).maxHp;
+        h.reviveAt = undefined;
+        dirty = true;
+      }
+    }
+    if (dirty) void this.persist();
+
+    const forge = this.bldLevel('forge');
     return {
       playerId: this.save.player.id,
       username: this.save.player.username,
       resources: this.save.resources,
-      heroes: this.save.heroes.map(heroToDTO),
+      heroes: this.save.heroes.map((h) => heroToDTO(h, forge)),
       buildings: this.save.buildings.map((b) => ({ ...b })),
     };
   }
@@ -180,7 +285,7 @@ class GameEngine {
 
   // --- Base ---
 
-  async upgradeBuilding(buildingType: string): Promise<{ building: BuildingDTO; resources: ResourceMap }> {
+  async upgradeBuilding(buildingType: string): Promise<{ building: BuildingDTO; resources: ResourceMap; heroes: HeroDTO[] }> {
     const config = BUILDING_CONFIGS[buildingType as keyof typeof BUILDING_CONFIGS];
     if (!config) throw new Error(`Unknown building type: ${buildingType}`);
 
@@ -188,34 +293,57 @@ class GameEngine {
     if (!building) throw new Error('Building not found');
     if (building.level >= config.maxLevel) throw new Error('Building already at max level');
 
+    if (buildingType !== 'town_hall') {
+      const thLevel = this.bldLevel('town_hall');
+      if (building.level >= thLevel) {
+        throw new Error(`Upgrade Town Hall to level ${building.level + 1} first`);
+      }
+    }
+
     const cost = config.upgradeCost(building.level);
     if (!canAfford(this.save.resources, cost)) throw new Error('Insufficient resources');
 
     this.save.resources = subtractCost(this.save.resources, cost);
     building.level += 1;
+
+    if (buildingType === 'barracks') {
+      const pool = BARRACKS_UNLOCKS[building.level] ?? [];
+      const existingClasses = new Set(this.save.heroes.map((h) => h.class));
+      for (const { class: cls, name } of pool) {
+        if (!existingClasses.has(cls)) {
+          this.save.heroes.push({
+            id: newId('hero'), name, class: cls, level: 1, xp: 0,
+            hp: HERO_TEMPLATES[cls].baseStats.maxHp, isAlive: true,
+          });
+        }
+      }
+    }
+
     await this.persist();
 
-    return { building: { ...building }, resources: { ...this.save.resources } };
+    const forge = this.bldLevel('forge');
+    return { building: { ...building }, resources: { ...this.save.resources }, heroes: this.save.heroes.map((h) => heroToDTO(h, forge)) };
   }
 
   // --- Expedition ---
 
   async startExpedition(heroIds: string[]): Promise<ExpeditionDTO> {
-    if (!heroIds || heroIds.length === 0) throw new Error('Select at least one hero');
+    if (!heroIds || heroIds.length !== 1) throw new Error('Select exactly one hero');
+    const heroId = heroIds[0];
+    const hero = this.save.heroes.find((h) => h.id === heroId && h.isAlive && h.hp > 0);
+    if (!hero) throw new Error('Invalid or dead hero selected');
 
-    const valid = heroIds.filter((id) => this.save.heroes.some((h) => h.id === id && h.isAlive && h.hp > 0));
-    if (valid.length !== heroIds.length) throw new Error('Invalid or dead heroes selected');
-
-    const mapRoom = this.save.buildings.find((b) => b.type === 'map_room');
-    const nodes = generateLabyrinth(mapRoom?.level ?? 1);
+    const maxDepth = runDepth(this.bldLevel('map_room'));
+    const room = generateStartRoom(maxDepth);
 
     this.save.expedition = {
       id: newId('exp'),
       status: 'active',
-      currentNodeId: nodes[0].id,
       startedAt: new Date().toISOString(),
-      heroIds: valid,
-      nodes,
+      heroId,
+      depth: 0,
+      maxDepth,
+      room,
       pendingLoot: {},
     };
     this.save.combat = null;
@@ -224,85 +352,40 @@ class GameEngine {
     return expeditionToDTO(this.save.expedition);
   }
 
-  async move(targetNodeId: string): Promise<{
-    expedition: ExpeditionDTO;
-    event: 'moved' | 'loot_found' | 'combat_started' | 'exited';
-    combatId?: string;
-    loot?: Partial<ResourceMap>;
-  }> {
+  /** Picks up a scattered resource pile by walking over it. */
+  async collectPickup(pickupId: string): Promise<{ expedition: ExpeditionDTO; resource?: ResourceType; amount?: number }> {
     const e = this.save.expedition;
     if (!e || e.status !== 'active') throw new Error('Expedition is not active');
 
-    const currentNode = e.nodes.find((n) => n.id === e.currentNodeId);
-    if (!currentNode) throw new Error('Current node not found');
-    if (!currentNode.connections.includes(targetNodeId)) {
-      throw new Error('Target node is not connected to current node');
-    }
+    const pk = e.room.pickups.find((p) => p.id === pickupId);
+    if (!pk || pk.collected) return { expedition: expeditionToDTO(e) };
 
-    const targetNode = e.nodes.find((n) => n.id === targetNodeId);
-    if (!targetNode) throw new Error('Target node not found');
-
-    const wasVisited = targetNode.visited;
-    targetNode.visited = true;
-    e.currentNodeId = targetNode.id;
-
-    let event: 'moved' | 'loot_found' | 'combat_started' | 'exited' = 'moved';
-    let combatId: string | undefined;
-    let loot: Partial<ResourceMap> | undefined;
-
-    if (targetNode.type === 'loot' && !wasVisited) {
-      loot = targetNode.loot ?? {};
-      for (const [k, v] of Object.entries(loot)) {
-        const key = k as ResourceType;
-        e.pendingLoot[key] = (e.pendingLoot[key] ?? 0) + (v ?? 0);
-      }
-      event = 'loot_found';
-    } else if (targetNode.type === 'pve_combat' && !wasVisited) {
-      combatId = this.startCombat(targetNode.id);
-      event = 'combat_started';
-    } else if (targetNode.type === 'exit') {
-      event = 'exited';
-    }
+    pk.collected = true;
+    const key = pk.resource;
+    e.pendingLoot[key] = (e.pendingLoot[key] ?? 0) + pk.amount;
 
     await this.persist();
-    return { expedition: expeditionToDTO(e), event, combatId, loot };
+    return { expedition: expeditionToDTO(e), resource: pk.resource, amount: pk.amount };
   }
 
-  private startCombat(nodeId: string): string {
-    const e = this.save.expedition!;
-    const nodeIndex = e.nodes.findIndex((n) => n.id === nodeId);
-    const heroes = this.save.heroes.filter((h) => e.heroIds.includes(h.id) && h.isAlive);
+  /** Walks through one of the two doors: either descends to a new room or extracts. */
+  async enterExit(exitId: string): Promise<{ expedition: ExpeditionDTO | null; extracted: boolean; extract?: ExtractResult }> {
+    const e = this.save.expedition;
+    if (!e || e.status !== 'active') throw new Error('Expedition is not active');
 
-    const heroParticipants: CombatParticipantDTO[] = heroes.map((h) => {
-      const stats = heroStats(h);
-      return {
-        id: newId('cp'),
-        type: 'hero',
-        name: h.name,
-        hp: stats.maxHp, // heroes enter each fight at full HP (matches server)
-        maxHp: stats.maxHp,
-        attack: stats.attack,
-        defense: stats.defense,
-        speed: stats.speed,
-        isAlive: true,
-        heroId: h.id,
-      };
-    });
+    const exit = e.room.exits.find((x) => x.id === exitId);
+    if (!exit) throw new Error('Exit not found');
 
-    const enemy = generateEnemy(nodeIndex);
-    const enemyParticipant: CombatParticipantDTO = { id: newId('cp'), ...enemy };
+    if (exit.isExtract) {
+      const extract = await this.extract();
+      return { expedition: null, extracted: true, extract };
+    }
 
-    const combat: CombatSave = {
-      id: newId('combat'),
-      expeditionId: e.id,
-      nodeId,
-      status: 'active',
-      turn: 1,
-      participants: [...heroParticipants, enemyParticipant],
-      log: [],
-    };
-    this.save.combat = combat;
-    return combat.id;
+    const nextDepth = e.depth + 1;
+    e.depth = nextDepth;
+    e.room = generateRoom(nextDepth, e.maxDepth, exit.leadsTo) as ExpeditionRoomDTO;
+    await this.persist();
+    return { expedition: expeditionToDTO(e), extracted: false };
   }
 
   async combatAction(action: CombatActionType, targetId?: string): Promise<{ combat: CombatDTO }> {
@@ -310,32 +393,54 @@ class GameEngine {
     if (!c) throw new Error('Combat not found');
     if (c.status !== 'active') throw new Error('Combat is not active');
 
-    const actorId = getActiveParticipantId(c.participants);
-    if (!actorId) throw new Error('No active participant');
+    c.turnQueue = c.turnQueue.filter(id => c.participants.find(p => p.id === id && p.isAlive));
+    if (c.turnQueue.length === 0) {
+      c.turnQueue = [...c.participants]
+        .filter(p => p.isAlive)
+        .sort((a, b) => b.speed - a.speed)
+        .map(p => p.id);
+    }
 
-    const { updatedParticipants, newLog } = processCombatAction(c.participants, c.turn, action, targetId, actorId);
+    const actorId = c.turnQueue[0];
+    if (!actorId) throw new Error('No active participant');
+    const actor = c.participants.find(p => p.id === actorId);
+    if (!actor || actor.type !== 'hero') throw new Error('Not a hero turn');
+
+    c.turnQueue.shift();
+
+    const { updatedParticipants, newLog } = processCombatAction(
+      c.participants, c.turn, action, targetId, actorId,
+    );
     applyUpdates(c.participants, updatedParticipants);
     c.log = [...c.log, ...newLog];
     c.turn += 1;
     c.status = evaluateOutcome(c.participants);
 
+    if (c.status === 'active') this.processEnemyTurns(c);
+
     const result = combatToDTO(c);
 
     if (c.status === 'defeat') {
-      // Lose the run and the heroes who were on it (permadeath).
-      const e = this.save.expedition;
-      if (e) {
-        for (const id of e.heroIds) {
-          const h = this.save.heroes.find((x) => x.id === id);
-          if (h) {
-            h.hp = 0;
-            h.isAlive = false;
-          }
+      const barracks = this.bldLevel('barracks');
+      const reviveMs = REVIVE_TIME_MS * Math.max(0.2, 1 - (barracks - 1) * 0.2);
+      for (const p of c.participants) {
+        if (p.type === 'hero' && p.heroId) {
+          const h = this.save.heroes.find((x) => x.id === p.heroId);
+          if (h) { h.hp = 0; h.isAlive = false; h.reviveAt = Date.now() + reviveMs; }
         }
       }
       this.save.expedition = null;
       this.save.combat = null;
     } else if (c.status === 'victory') {
+      for (const p of c.participants) {
+        if (p.type === 'hero' && p.heroId && p.isAlive) {
+          const h = this.save.heroes.find((x) => x.id === p.heroId);
+          if (!h || !h.isAlive) continue;
+          h.xp += XP_PER_ROOM;
+          const threshold = XP_TO_LEVEL(h.level);
+          if (h.xp >= threshold) { h.xp -= threshold; h.level += 1; h.hp = heroStats(h).maxHp; }
+        }
+      }
       this.save.combat = null;
     }
 
@@ -343,17 +448,55 @@ class GameEngine {
     return { combat: result };
   }
 
-  async extract(): Promise<{ success: boolean; lootGained: Partial<ResourceMap>; message: string }> {
+  async reviveHero(heroId: string): Promise<{ resources: ResourceMap; heroes: HeroDTO[] }> {
+    const h = this.save.heroes.find((x) => x.id === heroId);
+    if (!h) throw new Error('Hero not found');
+    if (h.isAlive) throw new Error('Hero is already alive');
+
+    const now = Date.now();
+    const timerExpired = h.reviveAt === undefined || now >= h.reviveAt;
+
+    if (!timerExpired) {
+      if ((this.save.resources.gold ?? 0) < REVIVE_GOLD_COST) {
+        throw new Error(`Need ${REVIVE_GOLD_COST} gold to revive`);
+      }
+      this.save.resources.gold -= REVIVE_GOLD_COST;
+    }
+
+    h.isAlive = true;
+    h.hp = heroStats(h).maxHp;
+    h.reviveAt = undefined;
+
+    await this.persist();
+    const forge = this.bldLevel('forge');
+    return { resources: { ...this.save.resources }, heroes: this.save.heroes.map((h) => heroToDTO(h, forge)) };
+  }
+
+  async extract(): Promise<ExtractResult> {
     const e = this.save.expedition;
     if (!e || e.status !== 'active') throw new Error('Expedition already ended');
 
-    const currentNode = e.nodes.find((n) => n.id === e.currentNodeId);
-    if (currentNode?.type !== 'exit') throw new Error('Must be on an exit node to extract');
-
     const loot = { ...e.pendingLoot };
+    const storage = this.bldLevel('storage');
+    const cap = STORAGE_CAPS[Math.min(storage - 1, STORAGE_CAPS.length - 1)];
     for (const [k, v] of Object.entries(loot)) {
       const key = k as ResourceType;
-      this.save.resources[key] = (this.save.resources[key] ?? 0) + (v ?? 0);
+      this.save.resources[key] = Math.min((this.save.resources[key] ?? 0) + (v ?? 0), cap);
+    }
+
+    // Completing the run grants the hero XP scaled by how deep they went.
+    const hero = this.save.heroes.find((h) => h.id === e.heroId);
+    if (hero && hero.isAlive) {
+      const lab = this.bldLevel('laboratory');
+      const xpGained = Math.round(XP_PER_ROOM * (e.depth + 1) * (1 + (lab - 1) * 0.2));
+      hero.xp += xpGained;
+      let threshold = XP_TO_LEVEL(hero.level);
+      while (hero.xp >= threshold) {
+        hero.xp -= threshold;
+        hero.level += 1;
+        hero.hp = heroStats(hero).maxHp;
+        threshold = XP_TO_LEVEL(hero.level);
+      }
     }
 
     this.save.expedition = null;

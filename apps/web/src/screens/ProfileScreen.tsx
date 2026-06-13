@@ -32,13 +32,21 @@ export function ProfileScreen() {
         const tmpl = HERO_TEMPLATES[h.class as HeroClass];
         const hpPct = Math.round((h.stats.hp / h.stats.maxHp) * 100);
         return (
-          <div key={h.id} style={{ ...s.heroCard, opacity: h.stats.hp > 0 ? 1 : 0.5 }}>
+          <div key={h.id} style={{ ...s.heroCard, opacity: h.isAlive ? 1 : 0.5 }}>
             <div style={s.heroRow}>
               <div>
                 <div style={s.heroName}>{h.name}</div>
                 <div style={s.heroClass}>{tmpl?.label ?? h.class} · Lv {h.level} · XP {h.xp}</div>
               </div>
-              <div style={s.heroStatus}>{h.stats.hp > 0 ? '✅' : '💀'}</div>
+              <div style={{ textAlign: 'center' }}>
+                <img
+                  src={`${import.meta.env.BASE_URL}heroes/${h.class}.png`}
+                  alt={h.class}
+                  style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, display: 'block', marginBottom: 2 }}
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+                <div style={s.heroStatus}>{h.isAlive ? '✅' : '💀'}</div>
+              </div>
             </div>
             <div style={s.heroAbility}>
               <span style={s.abilityLabel}>Ability: </span>

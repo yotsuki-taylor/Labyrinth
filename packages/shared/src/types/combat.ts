@@ -12,6 +12,8 @@ export interface CombatParticipantDTO {
   speed: number;
   isAlive: boolean;
   heroId?: string;
+  heroClass?: string;
+  enemyImage?: string;
 }
 
 export interface CombatDTO {

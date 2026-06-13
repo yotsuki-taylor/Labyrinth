@@ -1,69 +1,106 @@
-import type { ExpeditionNodeDTO, NodeType, ResourceMap } from '@labyrinth/shared';
+import type {
+  ExpeditionRoomDTO,
+  RoomType,
+  RoomPickupDTO,
+  RoomExitDTO,
+  ResourceType,
+} from '@labyrinth/shared';
 
 /**
- * Browser port of the former server-side labyrinth generator.
- * Produces a graph of 10–15 nodes: start → branching paths → exit.
+ * Procedurally generates a single isometric room the player walks through.
+ * Resources are scattered across the floor; two exits lead onward (or extract).
  */
-export function generateLabyrinth(mapRoomLevel = 1): ExpeditionNodeDTO[] {
-  const nodeCount = 10 + Math.min(mapRoomLevel - 1, 5); // 10–15 nodes
-  const nodes: ExpeditionNodeDTO[] = [];
 
-  for (let i = 0; i < nodeCount; i++) {
-    let type: NodeType;
-    if (i === 0) {
-      type = 'start';
-    } else if (i === nodeCount - 1) {
-      type = 'exit';
-    } else {
-      const roll = Math.random();
-      if (roll < 0.25) type = 'loot';
-      else if (roll < 0.55) type = 'pve_combat';
-      else type = 'empty';
-    }
-
-    nodes.push({
-      id: `node_${i}`,
-      type,
-      // The start node counts as already visited (you spawn there).
-      visited: type === 'start',
-      connections: [],
-      x: Math.round(Math.random() * 600 + 50),
-      y: Math.round(Math.random() * 400 + 50),
-      loot: type === 'loot' ? generateLoot() : undefined,
-    });
-  }
-
-  // Main chain guarantees a start→exit path exists.
-  for (let i = 0; i < nodeCount - 1; i++) {
-    connect(nodes[i], nodes[i + 1]);
-  }
-
-  // A few extra edges for branching.
-  const extraEdges = Math.floor(nodeCount * 0.3);
-  for (let k = 0; k < extraEdges; k++) {
-    const a = Math.floor(Math.random() * (nodeCount - 2));
-    const b = a + 2 + Math.floor(Math.random() * 3);
-    if (b < nodeCount) connect(nodes[a], nodes[b]);
-  }
-
-  return nodes;
+function newId(prefix: string): string {
+  const rnd =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `${prefix}_${rnd}`;
 }
 
-function connect(a: ExpeditionNodeDTO, b: ExpeditionNodeDTO) {
-  if (!a.connections.includes(b.id)) a.connections.push(b.id);
-  if (!b.connections.includes(a.id)) b.connections.push(a.id);
-}
-
-function generateLoot(): Partial<ResourceMap> {
-  return {
-    gold: roll(10, 50),
-    stone: Math.random() > 0.5 ? roll(5, 20) : 0,
-    iron: Math.random() > 0.7 ? roll(5, 15) : 0,
-    essence: Math.random() > 0.85 ? roll(1, 5) : 0,
-    relics: Math.random() > 0.95 ? 1 : 0,
-  };
-}
-
-function roll(min: number, max: number): number {
+function ri(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/** Picks the type of a room reached by going one level deeper. */
+function rollRoomType(): RoomType {
+  const r = Math.random();
+  if (r < 0.45) return 'loot';
+  if (r < 0.60) return 'treasure';
+  return 'empty';
+}
+
+/** How many resource piles & their richness, by room type and depth. */
+function pickupPlan(type: RoomType, depth: number): { count: number; rare: boolean } {
+  const depthBonus = Math.floor(depth / 2);
+  switch (type) {
+    case 'start':    return { count: ri(1, 2), rare: false };
+    case 'empty':    return { count: ri(1, 3) + depthBonus, rare: false };
+    case 'loot':     return { count: ri(4, 6) + depthBonus, rare: false };
+    case 'treasure': return { count: ri(3, 5) + depthBonus, rare: true };
+  }
+}
+
+function rollResource(rare: boolean): { resource: ResourceType; amount: number } {
+  if (rare) {
+    const r = Math.random();
+    if (r < 0.45) return { resource: 'essence', amount: ri(2, 6) };
+    if (r < 0.70) return { resource: 'relics', amount: ri(1, 2) };
+    if (r < 0.88) return { resource: 'iron', amount: ri(10, 25) };
+    return { resource: 'gold', amount: ri(40, 90) };
+  }
+  const r = Math.random();
+  if (r < 0.50) return { resource: 'gold', amount: ri(8, 30) };
+  if (r < 0.78) return { resource: 'stone', amount: ri(5, 20) };
+  if (r < 0.93) return { resource: 'iron', amount: ri(3, 12) };
+  if (r < 0.99) return { resource: 'essence', amount: ri(1, 3) };
+  return { resource: 'relics', amount: 1 };
+}
+
+/**
+ * Generates one room.
+ * @param depth     0-based room depth in the run.
+ * @param maxDepth  total rooms in the run (final room is depth === maxDepth - 1).
+ * @param type      the room's type.
+ */
+export function generateRoom(depth: number, maxDepth: number, type: RoomType): ExpeditionRoomDTO {
+  const width = ri(8, 11);
+  const height = ri(9, 12);
+  const isFinal = depth >= maxDepth - 1;
+
+  // Scatter pickups across the interior (leave a 1-tile margin from walls,
+  // and keep the bottom entrance row / top exit row clear).
+  const { count, rare } = pickupPlan(type, depth);
+  const pickups: RoomPickupDTO[] = [];
+  const used = new Set<string>();
+  let attempts = 0;
+  while (pickups.length < count && attempts < count * 8) {
+    attempts++;
+    const x = ri(1, width - 2);
+    const y = ri(2, height - 3);
+    const key = `${x},${y}`;
+    if (used.has(key)) continue;
+    used.add(key);
+    const { resource, amount } = rollResource(rare && Math.random() < 0.6);
+    pickups.push({ id: newId('pk'), resource, amount, x, y, collected: false });
+  }
+
+  // Two exits at the top — left and right doorways.
+  const exits: RoomExitDTO[] = [
+    { id: newId('ex'), side: 'left',  leadsTo: isFinal ? type : rollRoomType(), isExtract: isFinal },
+    { id: newId('ex'), side: 'right', leadsTo: isFinal ? type : rollRoomType(), isExtract: isFinal },
+  ];
+
+  return { id: newId('room'), depth, type, width, height, pickups, exits, isFinal };
+}
+
+/** Creates the opening room of a fresh expedition. */
+export function generateStartRoom(maxDepth: number): ExpeditionRoomDTO {
+  return generateRoom(0, maxDepth, 'start');
+}
+
+/** Run length scales with Map Room level: 4 rooms at L1, +1 per level (cap 8). */
+export function runDepth(mapRoomLevel: number): number {
+  return Math.min(8, 4 + (mapRoomLevel - 1));
 }

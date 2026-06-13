@@ -6,3 +6,6 @@ build/
 .DS_Store
 prisma/migrations/
 *.tsbuildinfo
+
+# Generated room preview artifacts (run: node scripts/render-room.mjs)
+preview/
