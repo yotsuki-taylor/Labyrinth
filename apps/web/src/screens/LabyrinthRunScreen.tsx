@@ -261,52 +261,51 @@ export function LabyrinthRunScreen() {
     function drawPlayer(t: number) {
       const p = playerRef.current;
       const { sx, sy } = toScreen(p.x, p.y);
-      const r = Math.max(11, TW * 0.32);
+      const r      = Math.max(11, TW * 0.32);
+      const footY  = sy + TH / 2;          // tile surface centre in isometric projection
+      const charH  = r * 2.2;              // sprite display height
+      const charTopY = footY - charH;
+      const charCY   = footY - charH / 2;  // vertical centre (for glow)
 
+      // Flat ellipse shadow on the floor — character feet land here.
       ctx.beginPath();
-      ctx.ellipse(sx, sy + r * 0.5, r * 0.8, r * 0.4, 0, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.ellipse(sx, footY, r * 0.72, r * 0.26, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fill();
 
       // Skill activation burst
       if (skillFlash.current > 0) {
         const fa = Math.min(1, skillFlash.current * 1.8);
-        const fg = ctx.createRadialGradient(sx, sy - r, 0, sx, sy - r, r * 3.5);
+        const fg = ctx.createRadialGradient(sx, charCY, 0, sx, charCY, r * 3.5);
         fg.addColorStop(0, `rgba(201,176,255,${fa.toFixed(2)})`);
         fg.addColorStop(1, 'rgba(201,176,255,0)');
         ctx.beginPath();
-        ctx.arc(sx, sy - r, r * 3.5, 0, Math.PI * 2);
+        ctx.arc(sx, charCY, r * 3.5, 0, Math.PI * 2);
         ctx.fillStyle = fg;
         ctx.fill();
       }
 
+      // Soft aura around the sprite
       const glow = r + 4 + 2 * Math.sin(t * 4);
-      const grd = ctx.createRadialGradient(sx, sy - r, 0, sx, sy - r, glow + 8);
+      const grd = ctx.createRadialGradient(sx, charCY, 0, sx, charCY, glow + 8);
       grd.addColorStop(0, 'rgba(201,176,255,0.6)');
       grd.addColorStop(1, 'rgba(201,176,255,0)');
       ctx.beginPath();
-      ctx.arc(sx, sy - r, glow + 8, 0, Math.PI * 2);
+      ctx.arc(sx, charCY, glow + 8, 0, Math.PI * 2);
       ctx.fillStyle = grd;
       ctx.fill();
 
+      // Sprite in natural proportions — no circular clip, no circle border.
       const img = heroImgRef.current;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(sx, sy - r, r, 0, Math.PI * 2);
-      ctx.closePath();
-      ctx.clip();
-      if (img && heroLoadedRef.current) {
-        ctx.drawImage(img, sx - r, sy - r - r, r * 2, r * 2);
+      if (img && heroLoadedRef.current && img.naturalWidth > 0) {
+        const displayW = charH * (img.naturalWidth / img.naturalHeight);
+        ctx.drawImage(img, sx - displayW / 2, charTopY, displayW, charH);
       } else {
+        // Fallback coloured token
+        const displayW = charH * 0.55;
         ctx.fillStyle = '#c9b0ff';
-        ctx.fillRect(sx - r, sy - r - r, r * 2, r * 2);
+        ctx.fillRect(sx - displayW / 2, charTopY, displayW, charH);
       }
-      ctx.restore();
-      ctx.beginPath();
-      ctx.arc(sx, sy - r, r, 0, Math.PI * 2);
-      ctx.strokeStyle = '#e8d8ff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
     }
 
     function drawJoystick() {
