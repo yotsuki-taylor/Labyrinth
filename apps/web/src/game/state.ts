@@ -9,7 +9,7 @@ import type {
   CombatStatus,
 } from '@labyrinth/shared';
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 /** A hero as persisted. Display stats are derived from class + level. */
 export interface HeroSave {

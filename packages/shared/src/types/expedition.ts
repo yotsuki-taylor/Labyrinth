@@ -38,6 +38,8 @@ export interface ExpeditionRoomDTO {
   exits: RoomExitDTO[];
   /** True when this room's exits extract instead of leading deeper. */
   isFinal: boolean;
+  /** Impassable wall tiles encoded as "col,row" strings. */
+  walls: string[];
 }
 
 export interface ExpeditionDTO {

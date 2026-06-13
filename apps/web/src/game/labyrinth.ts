@@ -58,6 +58,62 @@ function rollResource(rare: boolean): { resource: ResourceType; amount: number }
   return { resource: 'relics', amount: 1 };
 }
 
+/** Scatter impassable pillar tiles, avoiding entrance / exits / pickups. */
+function generateWalls(
+  width: number,
+  height: number,
+  pickups: RoomPickupDTO[],
+  type: RoomType,
+): string[] {
+  const blocked = new Set<string>();
+
+  // Clear corridor from entrance (bottom centre) upward.
+  const entX = Math.round((width - 1) / 2);
+  for (let dy = 0; dy <= 3; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      blocked.add(`${entX + dx},${height - 1 - dy}`);
+    }
+  }
+
+  // Clear corridors around both exits (top-left & top-right).
+  const lx = Math.round(width * 0.24);
+  const rx = Math.round(width * 0.76);
+  for (let dy = -1; dy <= 3; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      blocked.add(`${lx + dx},${dy}`);
+      blocked.add(`${rx + dx},${dy}`);
+    }
+  }
+
+  // Clear pickup tiles and their immediate neighbours so they stay reachable.
+  for (const pk of pickups) {
+    const pc = Math.round(pk.x), pr = Math.round(pk.y);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) blocked.add(`${pc + dx},${pr + dy}`);
+    }
+  }
+
+  const wallCount: Record<RoomType, [number, number]> = {
+    start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9],
+  };
+  const [mn, mx] = wallCount[type];
+  const count = ri(mn, mx);
+  const walls: string[] = [];
+  let attempts = 0;
+
+  while (walls.length < count && attempts < count * 20) {
+    attempts++;
+    const col = ri(1, width - 2);
+    const row = ri(2, height - 4);
+    const key = `${col},${row}`;
+    if (blocked.has(key)) continue;
+    blocked.add(key);
+    walls.push(key);
+  }
+
+  return walls;
+}
+
 /**
  * Generates one room.
  * @param depth     0-based room depth in the run.
@@ -92,7 +148,9 @@ export function generateRoom(depth: number, maxDepth: number, type: RoomType): E
     { id: newId('ex'), side: 'right', leadsTo: isFinal ? type : rollRoomType(), isExtract: isFinal },
   ];
 
-  return { id: newId('room'), depth, type, width, height, pickups, exits, isFinal };
+  const walls = generateWalls(width, height, pickups, type);
+
+  return { id: newId('room'), depth, type, width, height, pickups, exits, isFinal, walls };
 }
 
 /** Creates the opening room of a fresh expedition. */

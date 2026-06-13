@@ -66,6 +66,11 @@ function migrateSave(raw: Record<string, any>): void {
     raw.combat = null;
     raw.version = 4;
   }
+  // v4 → v5: rooms now include walls; clear stale expedition so it regenerates.
+  if (raw.version === 4) {
+    raw.expedition = null;
+    raw.version = 5;
+  }
 }
 
 const STARTER_HEROES: { class: HeroClass; name: string }[] = [
