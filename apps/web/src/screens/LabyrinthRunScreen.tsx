@@ -2,13 +2,21 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore.js';
 import type { ExpeditionDTO, RoomType } from '@labyrinth/shared';
 
-const SPEED = 3.4;            // tiles per second
-const PLAYER_R = 0.30;        // collision radius
-const PICKUP_R = 0.65;        // collect radius
-const EXIT_R = 0.85;          // exit trigger radius
+const SPEED        = 3.4;   // tiles/s
+const PLAYER_R     = 0.30;  // collision radius
+const PICKUP_R     = 0.75;  // proximity to activate interact button
+const EXIT_R       = 0.85;  // exit trigger radius
+const INTERACT_SEC = 0.9;   // seconds to hold button to collect
+const SKILL_CD     = 8;     // skill cooldown in seconds
 
 const RES_ICON: Record<string, string> = {
   gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🔮',
+};
+
+const SKILL_ICON: Record<string, string> = {
+  warrior: '🛡️', ranger: '🏹', warlock: '💀', cleric: '💊',
+  assassin: '🗡️', sorcerer: '⚡', paladin: '✝️', barbarian: '🪓',
+  druid: '🌿', bard: '🎵', alchemist: '⚗️', inventor: '🔧',
 };
 
 function roomPreviewIcon(type: RoomType, isExtract: boolean): string {
@@ -21,26 +29,36 @@ function roomPreviewIcon(type: RoomType, isExtract: boolean): string {
 export function LabyrinthRunScreen() {
   const { expedition, heroes, collectPickup, enterExit, setScreen, error } = useGameStore();
 
-  const canvasRef    = useRef<HTMLCanvasElement>(null);
-  const playerRef    = useRef({ x: 0, y: 0 });
-  const joyRef       = useRef({ active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 });
-  const keysRef      = useRef(new Set<string>());
-  const expRef       = useRef<ExpeditionDTO | null>(expedition);
-  const collectedRef = useRef(new Set<string>());
-  const busyRef      = useRef(false);
-  const rafRef       = useRef(0);
-  const lastTRef     = useRef(0);
+  const canvasRef     = useRef<HTMLCanvasElement>(null);
+  const playerRef     = useRef({ x: 0, y: 0 });
+  const joyRef        = useRef({ active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 });
+  const keysRef       = useRef(new Set<string>());
+  const expRef        = useRef<ExpeditionDTO | null>(expedition);
+  const collectedRef  = useRef(new Set<string>());
+  const busyRef       = useRef(false);
+  const rafRef        = useRef(0);
+  const lastTRef      = useRef(0);
   const heroImgRef    = useRef<HTMLImageElement | null>(null);
   const heroLoadedRef = useRef(false);
   const cameraRef     = useRef({ x: 0, y: 0 });
+  const heroClassRef  = useRef('warrior');
+  // Interact button state
+  const nearPickupRef = useRef<string | null>(null);
+  const interactHeld  = useRef(false);
+  const interactTid   = useRef(-1);
+  const interactProg  = useRef(0);
+  // Skill button state
+  const skillCool     = useRef(0);
+  const skillFlash    = useRef(0);
+  const skillTid      = useRef(-1);
 
-  // Keep a live ref to the expedition for the rAF loop.
   useEffect(() => { expRef.current = expedition; }, [expedition]);
 
-  // Resolve the hero's class → load portrait for the player token.
   const heroClass = expedition
     ? heroes.find((h) => h.id === expedition.heroId)?.class
     : undefined;
+
+  useEffect(() => { heroClassRef.current = heroClass ?? 'warrior'; }, [heroClass]);
 
   useEffect(() => {
     if (!heroClass) return;
@@ -51,27 +69,42 @@ export function LabyrinthRunScreen() {
     heroImgRef.current = img;
   }, [heroClass]);
 
-  // Reset player to the entrance whenever a new room loads.
+  // Reset to entrance on each new room.
   useEffect(() => {
     if (!expedition) return;
     const { width, height } = expedition.room;
-    playerRef.current = { x: (width - 1) / 2, y: height - 1 };
-    cameraRef.current = { x: (width - 1) / 2, y: height - 1 };
+    playerRef.current  = { x: (width - 1) / 2, y: height - 1 };
+    cameraRef.current  = { x: (width - 1) / 2, y: height - 1 };
     collectedRef.current = new Set(
       expedition.room.pickups.filter((p) => p.collected).map((p) => p.id),
     );
-    busyRef.current = false;
+    busyRef.current     = false;
+    interactProg.current = 0;
+    nearPickupRef.current = null;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expedition?.room.id]);
 
-  // Keyboard controls.
+  const triggerSkill = useCallback(() => {
+    if (skillCool.current > 0) return;
+    skillCool.current  = SKILL_CD;
+    skillFlash.current = 0.6;
+  }, []);
+
+  // Keyboard: WASD / arrows + E (interact) + Q (skill).
   useEffect(() => {
-    const dn = (e: KeyboardEvent) => keysRef.current.add(e.key);
-    const up = (e: KeyboardEvent) => keysRef.current.delete(e.key);
+    const dn = (e: KeyboardEvent) => {
+      keysRef.current.add(e.key);
+      if (e.key === 'e' || e.key === 'E') interactHeld.current = true;
+      if (e.key === 'q' || e.key === 'Q') triggerSkill();
+    };
+    const up = (e: KeyboardEvent) => {
+      keysRef.current.delete(e.key);
+      if (e.key === 'e' || e.key === 'E') interactHeld.current = false;
+    };
     window.addEventListener('keydown', dn);
     window.addEventListener('keyup', up);
     return () => { window.removeEventListener('keydown', dn); window.removeEventListener('keyup', up); };
-  }, []);
+  }, [triggerSkill]);
 
   const doCollect = useCallback((id: string) => {
     if (collectedRef.current.has(id)) return;
@@ -95,9 +128,12 @@ export function LabyrinthRunScreen() {
 
     const { width: RW, height: RH } = expedition.room;
 
-    // Large fixed tile size — camera follows the player (no full-room fit).
     const TW = 180;
     const TH = TW / 2;
+
+    // Button centres (canvas pixels) — must match touch handler below.
+    const IBTN = { x: W - 65, y: H - 80,  r: 34 };  // Interact
+    const SBTN = { x: W - 65, y: H - 170, r: 34 };  // Skill
 
     function toScreen(tx: number, ty: number) {
       const cam = cameraRef.current;
@@ -110,7 +146,6 @@ export function LabyrinthRunScreen() {
     const inRoom = (x: number, y: number) =>
       x >= 0 && x <= RW - 1 && y >= 0 && y <= RH - 1;
 
-    // Exit world positions (top-left & top-right, just past the back wall).
     function exitPos(side: 'left' | 'right') {
       return { x: side === 'left' ? RW * 0.24 : RW * 0.76, y: -0.15 };
     }
@@ -118,7 +153,7 @@ export function LabyrinthRunScreen() {
 
     const noScroll = (e: TouchEvent) => e.preventDefault();
     canvas.addEventListener('touchstart', noScroll, { passive: false });
-    canvas.addEventListener('touchmove', noScroll, { passive: false });
+    canvas.addEventListener('touchmove',  noScroll, { passive: false });
 
     function drawDiamond(sx: number, sy: number, tw: number, th: number, fill: string | CanvasGradient, stroke?: string) {
       ctx.beginPath();
@@ -140,9 +175,9 @@ export function LabyrinthRunScreen() {
           const { sx, sy } = toScreen(col, row);
           if (sx < -TW || sx > W + TW || sy < -TH * 2 || sy > H + TH * 2) continue;
           const g = ctx.createLinearGradient(sx, sy, sx, sy + TH);
-          g.addColorStop(0, '#3c3c5a');
+          g.addColorStop(0,   '#3c3c5a');
           g.addColorStop(0.6, '#2a2a42');
-          g.addColorStop(1, '#191929');
+          g.addColorStop(1,   '#191929');
           drawDiamond(sx, sy, TW * 0.98, TH * 0.98, g, '#20203a');
         }
       }
@@ -166,8 +201,6 @@ export function LabyrinthRunScreen() {
         const p = exitPos(ex.side);
         const { sx, sy } = toScreen(p.x, p.y);
         const color = ex.isExtract ? '#4ade80' : ex.leadsTo === 'treasure' ? '#facc15' : ex.leadsTo === 'loot' ? '#c9b0ff' : '#7a8cff';
-
-        // Glow halo
         const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, TW * 0.9 * pulse);
         grd.addColorStop(0, color + '66');
         grd.addColorStop(1, color + '00');
@@ -175,18 +208,12 @@ export function LabyrinthRunScreen() {
         ctx.arc(sx, sy, TW * 0.9 * pulse, 0, Math.PI * 2);
         ctx.fillStyle = grd;
         ctx.fill();
-
-        // Doorway arch
         ctx.font = `${Math.round(TW * 0.85)}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('🚪', sx, sy);
-
-        // Preview icon above the door
         ctx.font = `${Math.round(TW * 0.5)}px sans-serif`;
         ctx.fillText(roomPreviewIcon(ex.leadsTo, ex.isExtract), sx, sy - TW * 0.7);
-
-        // Label
         ctx.font = '700 11px sans-serif';
         ctx.fillStyle = color;
         ctx.fillText(ex.isExtract ? 'EXTRACT' : ex.leadsTo.toUpperCase(), sx, sy + TW * 0.55);
@@ -200,16 +227,24 @@ export function LabyrinthRunScreen() {
       ctx.textBaseline = 'middle';
       for (const pk of exp.room.pickups) {
         if (pk.collected || collectedRef.current.has(pk.id)) continue;
+        const isNear = nearPickupRef.current === pk.id;
         const bob = Math.sin(t * 3 + pk.x + pk.y) * (TH * 0.12);
         const { sx, sy } = toScreen(pk.x, pk.y);
 
-        // Soft shadow on the floor
         ctx.beginPath();
         ctx.ellipse(sx, sy + TH * 0.1, TW * 0.18, TH * 0.18, 0, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(0,0,0,0.35)';
         ctx.fill();
 
-        // Glow
+        // Green pulse ring on the nearest pickup
+        if (isNear) {
+          ctx.beginPath();
+          ctx.arc(sx, sy - 6 + bob, TW * 0.42 * (0.85 + 0.15 * Math.sin(t * 6)), 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(74,222,128,0.65)';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        }
+
         const grd = ctx.createRadialGradient(sx, sy - 6 + bob, 0, sx, sy - 6 + bob, TW * 0.34);
         grd.addColorStop(0, 'rgba(250,204,21,0.45)');
         grd.addColorStop(1, 'rgba(250,204,21,0)');
@@ -228,13 +263,23 @@ export function LabyrinthRunScreen() {
       const { sx, sy } = toScreen(p.x, p.y);
       const r = Math.max(11, TW * 0.32);
 
-      // Shadow
       ctx.beginPath();
       ctx.ellipse(sx, sy + r * 0.5, r * 0.8, r * 0.4, 0, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(0,0,0,0.4)';
       ctx.fill();
 
-      // Aura
+      // Skill activation burst
+      if (skillFlash.current > 0) {
+        const fa = Math.min(1, skillFlash.current * 1.8);
+        const fg = ctx.createRadialGradient(sx, sy - r, 0, sx, sy - r, r * 3.5);
+        fg.addColorStop(0, `rgba(201,176,255,${fa.toFixed(2)})`);
+        fg.addColorStop(1, 'rgba(201,176,255,0)');
+        ctx.beginPath();
+        ctx.arc(sx, sy - r, r * 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = fg;
+        ctx.fill();
+      }
+
       const glow = r + 4 + 2 * Math.sin(t * 4);
       const grd = ctx.createRadialGradient(sx, sy - r, 0, sx, sy - r, glow + 8);
       grd.addColorStop(0, 'rgba(201,176,255,0.6)');
@@ -244,7 +289,6 @@ export function LabyrinthRunScreen() {
       ctx.fillStyle = grd;
       ctx.fill();
 
-      // Portrait clipped into a circle (or fallback token)
       const img = heroImgRef.current;
       ctx.save();
       ctx.beginPath();
@@ -284,7 +328,6 @@ export function LabyrinthRunScreen() {
         ctx.strokeStyle = 'rgba(200,176,255,0.6)';
         ctx.stroke();
       } else {
-        // Hint ring in the bottom-left corner.
         ctx.beginPath();
         ctx.arc(70, H - 70, 42, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(120,120,200,0.25)';
@@ -297,24 +340,111 @@ export function LabyrinthRunScreen() {
       }
     }
 
+    // Generic circular action button with optional progress ring.
+    function drawCircleBtn(
+      bx: number, by: number, r: number,
+      active: boolean,
+      icon: string,
+      label: string,
+      progress: number,   // 0..1 arc fill
+      rgb: string,        // e.g. '74,222,128'
+    ) {
+      ctx.beginPath();
+      ctx.arc(bx, by, r, 0, Math.PI * 2);
+      ctx.fillStyle = active ? `rgba(${rgb},0.22)` : 'rgba(10,10,25,0.78)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(bx, by, r, 0, Math.PI * 2);
+      ctx.strokeStyle = active ? `rgba(${rgb},0.9)` : 'rgba(80,80,120,0.45)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      if (progress > 0) {
+        ctx.beginPath();
+        ctx.arc(bx, by, r + 5, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+        ctx.strokeStyle = `rgba(${rgb},1)`;
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+      }
+
+      ctx.globalAlpha = active ? 1 : 0.42;
+      ctx.font = `${Math.round(r * 0.72)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(icon, bx, by - 3);
+      ctx.globalAlpha = 1;
+
+      ctx.font = `700 ${Math.round(r * 0.30)}px sans-serif`;
+      ctx.fillStyle = active ? `rgba(${rgb},1)` : 'rgba(140,140,190,0.55)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, bx, by + r * 0.55);
+    }
+
+    function drawButtons() {
+      const near    = nearPickupRef.current;
+      const prog    = interactProg.current;
+      const hasNear = near !== null;
+
+      // Show the resource icon of the nearest pickup on the interact button.
+      let interactIcon = '🖐️';
+      if (hasNear) {
+        const pk = expRef.current?.room.pickups.find((p) => p.id === near);
+        if (pk) interactIcon = RES_ICON[pk.resource] ?? '🖐️';
+      }
+
+      drawCircleBtn(
+        IBTN.x, IBTN.y, IBTN.r,
+        hasNear,
+        interactIcon,
+        hasNear ? 'HOLD E' : 'E',
+        prog,
+        '74,222,128',
+      );
+
+      // Skill button
+      const cd    = skillCool.current;
+      const ready = cd <= 0;
+      const flash = skillFlash.current > 0;
+
+      if (flash) {
+        ctx.beginPath();
+        ctx.arc(SBTN.x, SBTN.y, SBTN.r + 10, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(201,176,255,${(skillFlash.current * 0.8).toFixed(2)})`;
+        ctx.fill();
+      }
+
+      // Recharge arc fills clockwise as cooldown counts down.
+      const rechargeProg = ready ? 0 : (SKILL_CD - cd) / SKILL_CD;
+      drawCircleBtn(
+        SBTN.x, SBTN.y, SBTN.r,
+        ready || flash,
+        SKILL_ICON[heroClassRef.current] ?? '⚡',
+        ready ? 'Q SKILL' : `${Math.ceil(cd)}s`,
+        rechargeProg,
+        flash ? '220,180,255' : '201,176,255',
+      );
+    }
+
     function loop(now: number) {
       const dt = Math.min((now - (lastTRef.current || now)) / 1000, 0.05);
       lastTRef.current = now;
       const t = now / 1000;
 
-      // Input vector
-      const joy = joyRef.current;
+      const joy  = joyRef.current;
       const keys = keysRef.current;
       let mdx = joy.active ? joy.dx : 0;
       let mdy = joy.active ? joy.dy : 0;
-      if (keys.has('ArrowUp') || keys.has('w') || keys.has('W')) mdy -= 1;
-      if (keys.has('ArrowDown') || keys.has('s') || keys.has('S')) mdy += 1;
-      if (keys.has('ArrowLeft') || keys.has('a') || keys.has('A')) mdx -= 1;
+      if (keys.has('ArrowUp')    || keys.has('w') || keys.has('W')) mdy -= 1;
+      if (keys.has('ArrowDown')  || keys.has('s') || keys.has('S')) mdy += 1;
+      if (keys.has('ArrowLeft')  || keys.has('a') || keys.has('A')) mdx -= 1;
       if (keys.has('ArrowRight') || keys.has('d') || keys.has('D')) mdx += 1;
       const len = Math.hypot(mdx, mdy);
       if (len > 1) { mdx /= len; mdy /= len; }
 
-      const p = playerRef.current;
+      const p   = playerRef.current;
       const exp = expRef.current;
 
       if (!busyRef.current && (mdx || mdy)) {
@@ -322,8 +452,6 @@ export function LabyrinthRunScreen() {
         const nx = p.x + mdx * step;
         const ny = p.y + mdy * step;
         if (inRoom(nx, p.y + PLAYER_R) && inRoom(nx, p.y - PLAYER_R)) p.x = nx;
-
-        // Allow walking up into the exit alcoves (y slightly negative near a door).
         let canY = inRoom(p.x + PLAYER_R, ny) && inRoom(p.x - PLAYER_R, ny);
         if (!canY && ny < 0 && exp) {
           for (const ex of exp.room.exits) {
@@ -334,24 +462,44 @@ export function LabyrinthRunScreen() {
         if (canY) p.y = ny;
       }
 
-      // Smooth camera follow
+      // Camera lerp
       const cam = cameraRef.current;
-      const lerp = Math.min(1, 8 * dt);
-      cam.x += (p.x - cam.x) * lerp;
-      cam.y += (p.y - cam.y) * lerp;
+      const lf  = Math.min(1, 8 * dt);
+      cam.x += (p.x - cam.x) * lf;
+      cam.y += (p.y - cam.y) * lf;
 
-      // Pickup collection
+      // Near-pickup detection + interact channeling
       if (!busyRef.current && exp) {
+        let nearest: string | null = null;
+        let nearDist = PICKUP_R;
         for (const pk of exp.room.pickups) {
           if (pk.collected || collectedRef.current.has(pk.id)) continue;
-          if (Math.hypot(p.x - pk.x, p.y - pk.y) < PICKUP_R) doCollect(pk.id);
+          const d = Math.hypot(p.x - pk.x, p.y - pk.y);
+          if (d < nearDist) { nearDist = d; nearest = pk.id; }
         }
+        nearPickupRef.current = nearest;
+
+        if (interactHeld.current && nearest !== null) {
+          interactProg.current = Math.min(1, interactProg.current + dt / INTERACT_SEC);
+          if (interactProg.current >= 1) {
+            interactProg.current = 0;
+            doCollect(nearest);
+          }
+        } else {
+          // Drain quickly when button released or stepped away.
+          interactProg.current = Math.max(0, interactProg.current - dt * 4);
+        }
+
         // Exit triggers
         for (const ex of exp.room.exits) {
           const ep = exitPos(ex.side);
           if (Math.hypot(p.x - ep.x, p.y - ep.y) < EXIT_R) { doExit(ex.id); break; }
         }
       }
+
+      // Cooldowns
+      skillCool.current  = Math.max(0, skillCool.current  - dt);
+      skillFlash.current = Math.max(0, skillFlash.current - dt);
 
       // ── Render ──
       ctx.clearRect(0, 0, W, H);
@@ -363,6 +511,7 @@ export function LabyrinthRunScreen() {
       drawPickups(t);
       drawPlayer(t);
       drawJoystick();
+      drawButtons();
 
       rafRef.current = requestAnimationFrame(loop);
     }
@@ -371,48 +520,77 @@ export function LabyrinthRunScreen() {
     return () => {
       cancelAnimationFrame(rafRef.current);
       canvas.removeEventListener('touchstart', noScroll);
-      canvas.removeEventListener('touchmove', noScroll);
+      canvas.removeEventListener('touchmove',  noScroll);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expedition?.room.id, doCollect, doExit]);
 
-  // ─── Touch (joystick anchored to bottom-left) ──────────────────────────────
+  // ─── Touch handlers (multi-touch: joystick + buttons simultaneously) ───────
   const onTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const scX = canvas.width / rect.width;
-    const scY = canvas.height / rect.height;
-    const touch = e.changedTouches[0];
-    const cx = (touch.clientX - rect.left) * scX;
-    const cy = (touch.clientY - rect.top) * scY;
-    // Activate when touching the lower-left control region.
-    if (cx < canvas.width * 0.6 && cy > canvas.height * 0.45) {
-      joyRef.current = { active: true, baseX: cx, baseY: cy, dx: 0, dy: 0, tid: touch.identifier };
+    const scX  = canvas.width  / rect.width;
+    const scY  = canvas.height / rect.height;
+    const CW   = canvas.width;
+    const CH   = canvas.height;
+
+    for (const touch of Array.from(e.changedTouches)) {
+      const cx = (touch.clientX - rect.left) * scX;
+      const cy = (touch.clientY - rect.top)  * scY;
+
+      // Interact button
+      if (Math.hypot(cx - (CW - 65), cy - (CH - 80)) < 46) {
+        interactHeld.current = true;
+        interactTid.current  = touch.identifier;
+        continue;
+      }
+      // Skill button
+      if (Math.hypot(cx - (CW - 65), cy - (CH - 170)) < 46) {
+        triggerSkill();
+        skillTid.current = touch.identifier;
+        continue;
+      }
+      // Joystick (bottom-left)
+      if (cx < CW * 0.6 && cy > CH * 0.45) {
+        joyRef.current = { active: true, baseX: cx, baseY: cy, dx: 0, dy: 0, tid: touch.identifier };
+      }
     }
-  }, []);
+  }, [triggerSkill]);
 
   const onTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const joy = joyRef.current;
     if (!joy.active) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const scX = canvas.width / rect.width;
-    const scY = canvas.height / rect.height;
+    const rect  = canvas.getBoundingClientRect();
+    const scX   = canvas.width  / rect.width;
+    const scY   = canvas.height / rect.height;
     const touch = Array.from(e.touches).find((tt) => tt.identifier === joy.tid);
     if (!touch) return;
-    const cx = (touch.clientX - rect.left) * scX;
-    const cy = (touch.clientY - rect.top) * scY;
+    const cx  = (touch.clientX - rect.left) * scX;
+    const cy  = (touch.clientY - rect.top)  * scY;
     const rdx = cx - joy.baseX, rdy = cy - joy.baseY;
-    const d = Math.hypot(rdx, rdy);
+    const d   = Math.hypot(rdx, rdy);
     const maxR = 52;
     joy.dx = d > 0 ? rdx / Math.max(d, maxR) : 0;
     joy.dy = d > 0 ? rdy / Math.max(d, maxR) : 0;
   }, []);
 
-  const onTouchEnd = useCallback(() => {
-    joyRef.current = { active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 };
+  const onTouchEnd = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    for (const touch of Array.from(e.changedTouches)) {
+      if (touch.identifier === joyRef.current.tid) {
+        joyRef.current = { active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 };
+      }
+      if (touch.identifier === interactTid.current) {
+        interactHeld.current = false;
+        interactTid.current  = -1;
+        interactProg.current = 0;
+      }
+      if (touch.identifier === skillTid.current) {
+        skillTid.current = -1;
+      }
+    }
   }, []);
 
   if (!expedition) {
