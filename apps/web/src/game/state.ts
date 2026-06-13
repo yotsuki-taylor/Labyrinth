@@ -2,14 +2,14 @@ import type {
   ResourceMap,
   BuildingDTO,
   HeroClass,
-  ExpeditionNodeDTO,
+  ExpeditionRoomDTO,
   ExpeditionStatus,
   CombatParticipantDTO,
   CombatLogEntry,
   CombatStatus,
 } from '@labyrinth/shared';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /** A hero as persisted. Display stats are derived from class + level. */
 export interface HeroSave {
@@ -27,10 +27,11 @@ export interface HeroSave {
 export interface ExpeditionSave {
   id: string;
   status: ExpeditionStatus;
-  currentNodeId: string;
   startedAt: string;
-  heroIds: string[];
-  nodes: ExpeditionNodeDTO[];
+  heroId: string;
+  depth: number;
+  maxDepth: number;
+  room: ExpeditionRoomDTO;
   pendingLoot: Partial<ResourceMap>;
 }
 

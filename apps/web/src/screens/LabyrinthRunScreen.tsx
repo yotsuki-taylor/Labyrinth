@@ -1,97 +1,68 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore.js';
-import type { ExpeditionDTO } from '@labyrinth/shared';
+import type { ExpeditionDTO, RoomType } from '@labyrinth/shared';
 
-// ─── Isometric map constants ───────────────────────────────────────────────
-const TW = 56;   // tile pixel width
-const TH = 28;   // tile pixel height (TW / 2 = perfect isometric)
-const ROWS = 13;
-const COLS = 12;
-const SPEED = 4.0; // tiles per second
+const SPEED = 3.4;            // tiles per second
+const PLAYER_R = 0.30;        // collision radius
+const PICKUP_R = 0.65;        // collect radius
+const EXIT_R = 0.85;          // exit trigger radius
 
-// 0 = void, 1 = floor
-const MAP: number[][] = [
-  [0,0,0,0,1,0,0,1,0,0,0,0], // row  0  exit corridors (col 4 left, col 7 right)
-  [0,0,0,0,1,0,0,1,0,0,0,0], // row  1
-  [0,0,0,0,1,0,0,1,0,0,0,0], // row  2
-  [0,0,1,1,1,1,1,1,1,1,0,0], // row  3  T-junction (cols 2–9)
-  [0,0,0,0,0,1,1,0,0,0,0,0], // row  4  main corridor (cols 5–6)
-  [0,0,0,0,0,1,1,0,0,0,0,0], // row  5
-  [0,0,0,1,1,1,1,1,1,0,0,0], // row  6  combat room (cols 3–8)
-  [0,0,0,1,1,1,1,1,1,0,0,0], // row  7
-  [0,0,0,0,0,1,1,0,0,0,0,0], // row  8  loot / first-room corridor
-  [0,0,0,0,0,1,1,0,0,0,0,0], // row  9
-  [0,0,0,0,1,1,1,1,0,0,0,0], // row 10  starting room (cols 4–7)
-  [0,0,0,0,1,1,1,1,0,0,0,0], // row 11
-  [0,0,0,0,1,1,1,1,0,0,0,0], // row 12  spawn
-];
+const RES_ICON: Record<string, string> = {
+  gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🔮',
+};
 
-// Zone definitions — each maps to an expedition node by index.
-// Positions match the tile map geometry above.
-const ZONES = [
-  { id: 'z0', nodeIdx: 0, cx: 5.5, cy: 12.0, r: 0.8 }, // start (pre-triggered)
-  { id: 'z1', nodeIdx: 1, cx: 5.5, cy:  8.5, r: 0.9 }, // first room
-  { id: 'z2', nodeIdx: 2, cx: 5.5, cy:  6.5, r: 1.0 }, // combat room
-  { id: 'z3', nodeIdx: 3, cx: 5.5, cy:  3.5, r: 1.0 }, // junction
-  { id: 'z4', nodeIdx: 4, cx: 4.0, cy:  1.5, r: 0.8 }, // left branch
-  { id: 'z5', nodeIdx: 5, cx: 7.0, cy:  1.5, r: 0.8 }, // right branch
-  { id: 'z6', nodeIdx: 6, cx: 4.0, cy:  0.5, r: 0.8 }, // exit left
-  { id: 'z7', nodeIdx: 7, cx: 7.0, cy:  0.5, r: 0.8 }, // exit right
-] as const;
-
-// Module-level: persist player position across combat unmount/remount
-let _savedPos: { x: number; y: number; expId: string } | null = null;
-
-function getStartPos(exp: ExpeditionDTO): { x: number; y: number } {
-  if (_savedPos?.expId === exp.id) return { x: _savedPos.x, y: _savedPos.y };
-  const visited = exp.nodes.filter(n => n.visited).length;
-  if (visited >= 4) return { x: 5.5, y: 3.5 }; // past junction
-  if (visited >= 3) return { x: 5.5, y: 6.5 }; // past combat
-  if (visited >= 2) return { x: 5.5, y: 8.5 }; // past first room
-  return { x: 5.5, y: 12 };
+function roomPreviewIcon(type: RoomType, isExtract: boolean): string {
+  if (isExtract) return '🚪';
+  if (type === 'loot') return '💰';
+  if (type === 'treasure') return '💎';
+  return '·';
 }
 
-// ─── Component ─────────────────────────────────────────────────────────────
 export function LabyrinthRunScreen() {
-  const { expedition, moveToNode, extract, setScreen, error } = useGameStore();
-  const [extractReady, setExtractReady] = useState(false);
-
-  // Track when player reaches an exit node
-  useEffect(() => {
-    if (!expedition) return;
-    const cur = expedition.nodes.find(n => n.id === expedition.currentNodeId);
-    setExtractReady(!!cur && cur.type === 'exit');
-  }, [expedition]);
+  const { expedition, heroes, collectPickup, enterExit, setScreen, error } = useGameStore();
 
   const canvasRef    = useRef<HTMLCanvasElement>(null);
-  const playerRef    = useRef({ x: 5.5, y: 12 });
-  const cameraRef    = useRef({ x: 5.5, y: 12 });
-  const joystickRef  = useRef({ active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 });
+  const playerRef    = useRef({ x: 0, y: 0 });
+  const joyRef       = useRef({ active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 });
   const keysRef      = useRef(new Set<string>());
-  const triggeredRef = useRef(new Set<string>());
+  const expRef       = useRef<ExpeditionDTO | null>(expedition);
+  const collectedRef = useRef(new Set<string>());
   const busyRef      = useRef(false);
-  const expRef       = useRef(expedition);
   const rafRef       = useRef(0);
   const lastTRef     = useRef(0);
+  const heroImgRef   = useRef<HTMLImageElement | null>(null);
+  const heroLoadedRef = useRef(false);
 
+  // Keep a live ref to the expedition for the rAF loop.
   useEffect(() => { expRef.current = expedition; }, [expedition]);
 
-  // Initialise / reset state when a new expedition starts
+  // Resolve the hero's class → load portrait for the player token.
+  const heroClass = expedition
+    ? heroes.find((h) => h.id === expedition.heroId)?.class
+    : undefined;
+
+  useEffect(() => {
+    if (!heroClass) return;
+    const img = new Image();
+    heroLoadedRef.current = false;
+    img.onload = () => { heroLoadedRef.current = true; };
+    img.src = `${import.meta.env.BASE_URL}heroes/${heroClass}.png`;
+    heroImgRef.current = img;
+  }, [heroClass]);
+
+  // Reset player to the entrance whenever a new room loads.
   useEffect(() => {
     if (!expedition) return;
-    const pos = getStartPos(expedition);
-    playerRef.current  = { ...pos };
-    cameraRef.current  = { ...pos };
-    const tr = triggeredRef.current;
-    tr.clear();
-    for (const z of ZONES) {
-      const node = expedition.nodes[z.nodeIdx];
-      if (node?.visited) tr.add(z.id);
-    }
+    const { width, height } = expedition.room;
+    playerRef.current = { x: (width - 1) / 2, y: height - 1 };
+    collectedRef.current = new Set(
+      expedition.room.pickups.filter((p) => p.collected).map((p) => p.id),
+    );
+    busyRef.current = false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expedition?.id]);
+  }, [expedition?.room.id]);
 
-  // Keyboard input
+  // Keyboard controls.
   useEffect(() => {
     const dn = (e: KeyboardEvent) => keysRef.current.add(e.key);
     const up = (e: KeyboardEvent) => keysRef.current.delete(e.key);
@@ -100,156 +71,231 @@ export function LabyrinthRunScreen() {
     return () => { window.removeEventListener('keydown', dn); window.removeEventListener('keyup', up); };
   }, []);
 
-  const doMove = useCallback(async (nodeId: string, zoneId: string) => {
+  const doCollect = useCallback((id: string) => {
+    if (collectedRef.current.has(id)) return;
+    collectedRef.current.add(id);
+    void collectPickup(id);
+  }, [collectPickup]);
+
+  const doExit = useCallback((id: string) => {
     if (busyRef.current) return;
     busyRef.current = true;
-    triggeredRef.current.add(zoneId);
-    _savedPos = { ...playerRef.current, expId: expRef.current?.id ?? '' };
-    try { await moveToNode(nodeId); }
-    finally { busyRef.current = false; }
-  }, [moveToNode]);
+    void enterExit(id);
+  }, [enterExit]);
 
-  // ─── rAF loop ────────────────────────────────────────────────────────────
+  // ─── Render loop ──────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !expedition) return;
-
+    const ctx = canvas.getContext('2d')!;
     const W = canvas.width;
     const H = canvas.height;
-    const ctx = canvas.getContext('2d')!;
 
-    // Prevent scroll while touching the canvas
-    const noScroll = (e: TouchEvent) => e.preventDefault();
-    canvas.addEventListener('touchstart', noScroll, { passive: false });
-    canvas.addEventListener('touchmove',  noScroll, { passive: false });
+    const { width: RW, height: RH } = expedition.room;
 
-    function tileToScreen(tx: number, ty: number) {
-      const cx = cameraRef.current.x, cy = cameraRef.current.y;
+    // Frame the whole room statically (no scrolling): fit it to the viewport.
+    const span = (RW - 1) + (RH - 1);
+    const twFit = (W * 0.92) / Math.max(1, span);
+    const thFit = (H * 0.62) / Math.max(1, span); // TH = TW/2 ⇒ compare against half
+    const TW = Math.max(22, Math.min(64, Math.min(twFit, thFit * 2)));
+    const TH = TW / 2;
+    const camX = (RW - 1) / 2;
+    const camY = (RH - 1) / 2;
+    const ANCHOR_Y = H * 0.46;
+
+    function toScreen(tx: number, ty: number) {
       return {
-        sx: (tx - ty - cx + cy) * (TW / 2) + W / 2,
-        sy: (tx + ty - cx - cy) * (TH / 2) + H * 0.38,
+        sx: (tx - ty - (camX - camY)) * (TW / 2) + W / 2,
+        sy: (tx + ty - (camX + camY)) * (TH / 2) + ANCHOR_Y,
       };
     }
 
-    function isWalkable(x: number, y: number): boolean {
-      const col = Math.floor(x), row = Math.floor(y);
-      return row >= 0 && row < ROWS && col >= 0 && col < COLS && MAP[row][col] === 1;
+    const inRoom = (x: number, y: number) =>
+      x >= 0 && x <= RW - 1 && y >= 0 && y <= RH - 1;
+
+    // Exit world positions (top-left & top-right, just past the back wall).
+    function exitPos(side: 'left' | 'right') {
+      return { x: side === 'left' ? RW * 0.24 : RW * 0.76, y: -0.15 };
     }
+    const entrancePos = { x: (RW - 1) / 2, y: RH - 0.85 };
 
-    function drawTile(col: number, row: number) {
-      if (MAP[row][col] !== 1) return;
-      const { sx, sy } = tileToScreen(col, row);
-      if (sx < -TW || sx > W + TW || sy < -TH * 3 || sy > H + TH * 2) return;
+    const noScroll = (e: TouchEvent) => e.preventDefault();
+    canvas.addEventListener('touchstart', noScroll, { passive: false });
+    canvas.addEventListener('touchmove', noScroll, { passive: false });
 
+    function drawDiamond(sx: number, sy: number, tw: number, th: number, fill: string | CanvasGradient, stroke?: string) {
       ctx.beginPath();
-      ctx.moveTo(sx,          sy);
-      ctx.lineTo(sx + TW / 2, sy + TH / 2);
-      ctx.lineTo(sx,          sy + TH);
-      ctx.lineTo(sx - TW / 2, sy + TH / 2);
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + tw / 2, sy + th / 2);
+      ctx.lineTo(sx, sy + th);
+      ctx.lineTo(sx - tw / 2, sy + th / 2);
       ctx.closePath();
-
-      const g = ctx.createLinearGradient(sx, sy, sx, sy + TH);
-      g.addColorStop(0, '#3e3e5c');
-      g.addColorStop(0.6, '#2c2c44');
-      g.addColorStop(1, '#1a1a2c');
-      ctx.fillStyle = g;
+      ctx.fillStyle = fill;
       ctx.fill();
-      ctx.strokeStyle = '#22223a';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
     }
 
-    function drawZones(t: number) {
-      const exp = expRef.current;
-      if (!exp) return;
-      const pulse = 0.75 + 0.25 * Math.sin(t * 2.5);
+    function drawFloor() {
+      for (let sum = 0; sum <= (RW - 1) + (RH - 1); sum++) {
+        for (let col = 0; col < RW; col++) {
+          const row = sum - col;
+          if (row < 0 || row >= RH) continue;
+          const { sx, sy } = toScreen(col, row);
+          const g = ctx.createLinearGradient(sx, sy, sx, sy + TH);
+          g.addColorStop(0, '#3c3c5a');
+          g.addColorStop(0.6, '#2a2a42');
+          g.addColorStop(1, '#191929');
+          drawDiamond(sx, sy, TW * 0.98, TH * 0.98, g, '#20203a');
+        }
+      }
+    }
+
+    function drawEntrance(t: number) {
+      const { sx, sy } = toScreen(entrancePos.x, entrancePos.y);
+      ctx.globalAlpha = 0.5 + 0.15 * Math.sin(t * 2);
+      ctx.font = `${Math.round(TW * 0.5)}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+      ctx.fillText('⛩️', sx, sy);
+      ctx.globalAlpha = 1;
+    }
 
-      for (const z of ZONES) {
-        const node = exp.nodes[z.nodeIdx];
-        if (!node) continue;
-        const { sx, sy } = tileToScreen(z.cx, z.cy);
-        const visited = triggeredRef.current.has(z.id);
+    function drawExits(t: number) {
+      const exp = expRef.current;
+      if (!exp) return;
+      const pulse = 0.75 + 0.25 * Math.sin(t * 2.6);
+      for (const ex of exp.room.exits) {
+        const p = exitPos(ex.side);
+        const { sx, sy } = toScreen(p.x, p.y);
+        const color = ex.isExtract ? '#4ade80' : ex.leadsTo === 'treasure' ? '#facc15' : ex.leadsTo === 'loot' ? '#c9b0ff' : '#7a8cff';
 
-        if (visited) {
-          if (node.type !== 'start') {
-            ctx.fillStyle = 'rgba(120,120,160,0.35)';
-            ctx.font = '11px sans-serif';
-            ctx.fillText('✓', sx, sy - 6);
-          }
-          continue;
-        }
-
-        let color = '', icon = '';
-        if      (node.type === 'exit')       { color = '#4ade80'; icon = '🚪'; }
-        else if (node.type === 'pve_combat') { color = '#f87171'; icon = '💀'; }
-        else if (node.type === 'loot')       { color = '#facc15'; icon = '💰'; }
-        else if (node.type === 'empty' && z.nodeIdx === 3) { color = '#a0a0ff'; icon = '⛩️'; }
-        else continue;
-
-        const grd = ctx.createRadialGradient(sx, sy - 6, 0, sx, sy - 6, 22 * pulse);
-        grd.addColorStop(0, color + '55');
+        // Glow halo
+        const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, TW * 0.9 * pulse);
+        grd.addColorStop(0, color + '66');
         grd.addColorStop(1, color + '00');
         ctx.beginPath();
-        ctx.arc(sx, sy - 6, 22 * pulse, 0, Math.PI * 2);
+        ctx.arc(sx, sy, TW * 0.9 * pulse, 0, Math.PI * 2);
         ctx.fillStyle = grd;
         ctx.fill();
 
-        ctx.font = '20px sans-serif';
-        ctx.fillText(icon, sx, sy - 6);
+        // Doorway arch
+        ctx.font = `${Math.round(TW * 0.85)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🚪', sx, sy);
+
+        // Preview icon above the door
+        ctx.font = `${Math.round(TW * 0.5)}px sans-serif`;
+        ctx.fillText(roomPreviewIcon(ex.leadsTo, ex.isExtract), sx, sy - TW * 0.7);
+
+        // Label
+        ctx.font = '700 11px sans-serif';
+        ctx.fillStyle = color;
+        ctx.fillText(ex.isExtract ? 'EXTRACT' : ex.leadsTo.toUpperCase(), sx, sy + TW * 0.55);
+      }
+    }
+
+    function drawPickups(t: number) {
+      const exp = expRef.current;
+      if (!exp) return;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const pk of exp.room.pickups) {
+        if (pk.collected || collectedRef.current.has(pk.id)) continue;
+        const bob = Math.sin(t * 3 + pk.x + pk.y) * (TH * 0.12);
+        const { sx, sy } = toScreen(pk.x, pk.y);
+
+        // Soft shadow on the floor
+        ctx.beginPath();
+        ctx.ellipse(sx, sy + TH * 0.1, TW * 0.18, TH * 0.18, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fill();
+
+        // Glow
+        const grd = ctx.createRadialGradient(sx, sy - 6 + bob, 0, sx, sy - 6 + bob, TW * 0.34);
+        grd.addColorStop(0, 'rgba(250,204,21,0.45)');
+        grd.addColorStop(1, 'rgba(250,204,21,0)');
+        ctx.beginPath();
+        ctx.arc(sx, sy - 6 + bob, TW * 0.34, 0, Math.PI * 2);
+        ctx.fillStyle = grd;
+        ctx.fill();
+
+        ctx.font = `${Math.round(TW * 0.5)}px sans-serif`;
+        ctx.fillText(RES_ICON[pk.resource] ?? '💰', sx, sy - 6 + bob);
       }
     }
 
     function drawPlayer(t: number) {
       const p = playerRef.current;
-      const { sx, sy } = tileToScreen(p.x, p.y);
-      const glow = 7 + 2 * Math.sin(t * 3);
+      const { sx, sy } = toScreen(p.x, p.y);
+      const r = Math.max(11, TW * 0.32);
 
-      const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, glow + 12);
-      grd.addColorStop(0, 'rgba(201,176,255,0.75)');
+      // Shadow
+      ctx.beginPath();
+      ctx.ellipse(sx, sy + r * 0.5, r * 0.8, r * 0.4, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fill();
+
+      // Aura
+      const glow = r + 4 + 2 * Math.sin(t * 4);
+      const grd = ctx.createRadialGradient(sx, sy - r, 0, sx, sy - r, glow + 8);
+      grd.addColorStop(0, 'rgba(201,176,255,0.6)');
       grd.addColorStop(1, 'rgba(201,176,255,0)');
       ctx.beginPath();
-      ctx.arc(sx, sy, glow + 12, 0, Math.PI * 2);
+      ctx.arc(sx, sy - r, glow + 8, 0, Math.PI * 2);
       ctx.fillStyle = grd;
       ctx.fill();
 
+      // Portrait clipped into a circle (or fallback token)
+      const img = heroImgRef.current;
+      ctx.save();
       ctx.beginPath();
-      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
-      ctx.fillStyle = '#c9b0ff';
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
+      ctx.arc(sx, sy - r, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      if (img && heroLoadedRef.current) {
+        ctx.drawImage(img, sx - r, sy - r - r, r * 2, r * 2);
+      } else {
+        ctx.fillStyle = '#c9b0ff';
+        ctx.fillRect(sx - r, sy - r - r, r * 2, r * 2);
+      }
+      ctx.restore();
+      ctx.beginPath();
+      ctx.arc(sx, sy - r, r, 0, Math.PI * 2);
+      ctx.strokeStyle = '#e8d8ff';
       ctx.lineWidth = 2;
       ctx.stroke();
     }
 
     function drawJoystick() {
-      const joy = joystickRef.current;
+      const joy = joyRef.current;
       if (joy.active) {
         ctx.beginPath();
-        ctx.arc(joy.baseX, joy.baseY, 44, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(15,15,40,0.65)';
+        ctx.arc(joy.baseX, joy.baseY, 46, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(15,15,40,0.6)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(100,100,200,0.5)';
+        ctx.strokeStyle = 'rgba(120,120,210,0.5)';
         ctx.lineWidth = 2;
         ctx.stroke();
-
-        const kx = joy.baseX + joy.dx * 32;
-        const ky = joy.baseY + joy.dy * 32;
+        const kx = joy.baseX + joy.dx * 34;
+        const ky = joy.baseY + joy.dy * 34;
         ctx.beginPath();
-        ctx.arc(kx, ky, 22, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(91,58,156,0.85)';
+        ctx.arc(kx, ky, 24, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(91,58,156,0.9)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(200,176,255,0.55)';
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(200,176,255,0.6)';
         ctx.stroke();
       } else {
-        // Subtle hint ring
+        // Hint ring in the bottom-left corner.
         ctx.beginPath();
-        ctx.arc(W - 68, H - 68, 40, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(100,100,180,0.25)';
+        ctx.arc(70, H - 70, 42, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(120,120,200,0.25)';
         ctx.lineWidth = 2;
         ctx.stroke();
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = 'rgba(140,140,190,0.5)';
+        ctx.textAlign = 'center';
+        ctx.fillText('MOVE', 70, H - 70);
       }
     }
 
@@ -258,66 +304,59 @@ export function LabyrinthRunScreen() {
       lastTRef.current = now;
       const t = now / 1000;
 
-      // ── Movement ──────────────────────────────────────────────────────
-      const joy  = joystickRef.current;
+      // Input vector
+      const joy = joyRef.current;
       const keys = keysRef.current;
       let mdx = joy.active ? joy.dx : 0;
       let mdy = joy.active ? joy.dy : 0;
-      if (keys.has('ArrowUp')    || keys.has('w') || keys.has('W')) mdy -= 1;
-      if (keys.has('ArrowDown')  || keys.has('s') || keys.has('S')) mdy += 1;
-      if (keys.has('ArrowLeft')  || keys.has('a') || keys.has('A')) mdx -= 1;
+      if (keys.has('ArrowUp') || keys.has('w') || keys.has('W')) mdy -= 1;
+      if (keys.has('ArrowDown') || keys.has('s') || keys.has('S')) mdy += 1;
+      if (keys.has('ArrowLeft') || keys.has('a') || keys.has('A')) mdx -= 1;
       if (keys.has('ArrowRight') || keys.has('d') || keys.has('D')) mdx += 1;
-      const mlen = Math.hypot(mdx, mdy);
-      if (mlen > 1) { mdx /= mlen; mdy /= mlen; }
+      const len = Math.hypot(mdx, mdy);
+      if (len > 1) { mdx /= len; mdy /= len; }
 
       const p = playerRef.current;
-      const step = SPEED * dt;
-      const R = 0.32; // collision radius
-      const nx = p.x + mdx * step;
-      const ny = p.y + mdy * step;
+      const exp = expRef.current;
 
-      if (isWalkable(nx, p.y) && isWalkable(nx, p.y + R) && isWalkable(nx, p.y - R)) p.x = nx;
-      if (isWalkable(p.x, ny) && isWalkable(p.x + R, ny) && isWalkable(p.x - R, ny)) p.y = ny;
+      if (!busyRef.current && (mdx || mdy)) {
+        const step = SPEED * dt;
+        const nx = p.x + mdx * step;
+        const ny = p.y + mdy * step;
+        if (inRoom(nx, p.y + PLAYER_R) && inRoom(nx, p.y - PLAYER_R)) p.x = nx;
 
-      // ── Camera lerp ───────────────────────────────────────────────────
-      const cam = cameraRef.current;
-      const lf = Math.min(1, 8 * dt);
-      cam.x += (p.x - cam.x) * lf;
-      cam.y += (p.y - cam.y) * lf;
-
-      // ── Zone triggers ─────────────────────────────────────────────────
-      if (!busyRef.current) {
-        const exp = expRef.current;
-        if (exp) {
-          for (const z of ZONES) {
-            if (triggeredRef.current.has(z.id)) continue;
-            const node = exp.nodes[z.nodeIdx];
-            if (!node) continue;
-            if (Math.hypot(p.x - z.cx, p.y - z.cy) < z.r) {
-              const cur = exp.nodes.find(n => n.id === exp.currentNodeId);
-              if (cur?.connections.includes(node.id)) {
-                doMove(node.id, z.id);
-              }
-            }
+        // Allow walking up into the exit alcoves (y slightly negative near a door).
+        let canY = inRoom(p.x + PLAYER_R, ny) && inRoom(p.x - PLAYER_R, ny);
+        if (!canY && ny < 0 && exp) {
+          for (const ex of exp.room.exits) {
+            const ep = exitPos(ex.side);
+            if (Math.abs(p.x - ep.x) < 1.1 && ny > -0.6) { canY = true; break; }
           }
+        }
+        if (canY) p.y = ny;
+      }
+
+      // Pickup collection
+      if (!busyRef.current && exp) {
+        for (const pk of exp.room.pickups) {
+          if (pk.collected || collectedRef.current.has(pk.id)) continue;
+          if (Math.hypot(p.x - pk.x, p.y - pk.y) < PICKUP_R) doCollect(pk.id);
+        }
+        // Exit triggers
+        for (const ex of exp.room.exits) {
+          const ep = exitPos(ex.side);
+          if (Math.hypot(p.x - ep.x, p.y - ep.y) < EXIT_R) { doExit(ex.id); break; }
         }
       }
 
-      // ── Render ────────────────────────────────────────────────────────
+      // ── Render ──
       ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = '#07070f';
       ctx.fillRect(0, 0, W, H);
-
-      // Painter's algorithm: draw tiles back-to-front by diagonal sum
-      for (let sum = 0; sum < ROWS + COLS - 1; sum++) {
-        const rMin = Math.max(0, sum - COLS + 1);
-        const rMax = Math.min(ROWS - 1, sum);
-        for (let row = rMin; row <= rMax; row++) {
-          drawTile(sum - row, row);
-        }
-      }
-
-      drawZones(t);
+      drawFloor();
+      drawEntrance(t);
+      drawExits(t);
+      drawPickups(t);
       drawPlayer(t);
       drawJoystick();
 
@@ -328,14 +367,13 @@ export function LabyrinthRunScreen() {
     return () => {
       cancelAnimationFrame(rafRef.current);
       canvas.removeEventListener('touchstart', noScroll);
-      canvas.removeEventListener('touchmove',  noScroll);
+      canvas.removeEventListener('touchmove', noScroll);
     };
-  // Re-run only when expedition id changes (not every expedition update)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expedition?.id, doMove]);
+  }, [expedition?.room.id, doCollect, doExit]);
 
-  // ─── Touch handlers ───────────────────────────────────────────────────────
-  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+  // ─── Touch (joystick anchored to bottom-left) ──────────────────────────────
+  const onTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -343,38 +381,36 @@ export function LabyrinthRunScreen() {
     const scY = canvas.height / rect.height;
     const touch = e.changedTouches[0];
     const cx = (touch.clientX - rect.left) * scX;
-    const cy = (touch.clientY - rect.top)  * scY;
-
-    // Bottom 45% → joystick
-    if (cy > canvas.height * 0.55) {
-      joystickRef.current = { active: true, baseX: cx, baseY: cy, dx: 0, dy: 0, tid: touch.identifier };
+    const cy = (touch.clientY - rect.top) * scY;
+    // Activate when touching the lower-left control region.
+    if (cx < canvas.width * 0.6 && cy > canvas.height * 0.45) {
+      joyRef.current = { active: true, baseX: cx, baseY: cy, dx: 0, dy: 0, tid: touch.identifier };
     }
   }, []);
 
-  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
-    const joy = joystickRef.current;
+  const onTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    const joy = joyRef.current;
     if (!joy.active) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const scX = canvas.width / rect.width;
     const scY = canvas.height / rect.height;
-    const touch = Array.from(e.touches).find(t => t.identifier === joy.tid);
+    const touch = Array.from(e.touches).find((tt) => tt.identifier === joy.tid);
     if (!touch) return;
     const cx = (touch.clientX - rect.left) * scX;
-    const cy = (touch.clientY - rect.top)  * scY;
+    const cy = (touch.clientY - rect.top) * scY;
     const rdx = cx - joy.baseX, rdy = cy - joy.baseY;
-    const len = Math.hypot(rdx, rdy);
-    const maxR = 50;
-    joy.dx = len > 0 ? rdx / Math.max(len, maxR) : 0;
-    joy.dy = len > 0 ? rdy / Math.max(len, maxR) : 0;
+    const d = Math.hypot(rdx, rdy);
+    const maxR = 52;
+    joy.dx = d > 0 ? rdx / Math.max(d, maxR) : 0;
+    joy.dy = d > 0 ? rdy / Math.max(d, maxR) : 0;
   }, []);
 
-  const handleTouchEnd = useCallback(() => {
-    joystickRef.current = { active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 };
+  const onTouchEnd = useCallback(() => {
+    joyRef.current = { active: false, baseX: 0, baseY: 0, dx: 0, dy: 0, tid: -1 };
   }, []);
 
-  // ─── Render ───────────────────────────────────────────────────────────────
   if (!expedition) {
     return (
       <div style={{ padding: 16 }}>
@@ -390,67 +426,61 @@ export function LabyrinthRunScreen() {
   }
 
   const W = Math.min(480, window.innerWidth);
-  const H = Math.floor(window.innerHeight * 0.87);
-
-  const pendingLoot = Object.entries(expedition.pendingLoot).filter(([, v]) => (v ?? 0) > 0);
+  const H = Math.floor(window.innerHeight * 0.88);
+  const loot = Object.entries(expedition.pendingLoot).filter(([, v]) => (v ?? 0) > 0);
 
   return (
-    <div style={{ position: 'relative', width: W, overflow: 'hidden', background: '#07070f' }}>
+    <div style={{ position: 'relative', width: W, margin: '0 auto', overflow: 'hidden', background: '#07070f' }}>
       <canvas
         ref={canvasRef}
         width={W}
         height={H}
         style={{ display: 'block', touchAction: 'none' }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onTouchCancel={handleTouchEnd}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
       />
 
-      {/* Loot badge */}
-      {pendingLoot.length > 0 && (
-        <div style={ui.loot}>
-          💰 {pendingLoot.map(([k, v]) => `${k}:${v}`).join(' ')}
-        </div>
+      {/* HUD: depth + loot */}
+      <div style={ui.topBar}>
+        <span style={ui.depth}>Room {expedition.depth + 1} / {expedition.maxDepth}</span>
+        {loot.length > 0 && (
+          <span style={ui.loot}>💰 {loot.map(([k, v]) => `${RES_ICON[k]}${v}`).join(' ')}</span>
+        )}
+      </div>
+
+      {expedition.room.isFinal && (
+        <div style={ui.finalHint}>🚪 Both doors lead to extraction — secure your loot!</div>
       )}
 
-      {/* Controls hint */}
-      <div style={ui.hint}>↑ move · joystick bottom-right</div>
-
-      {/* Error */}
       {error && <div style={ui.error}>{error}</div>}
-
-      {/* Extract button */}
-      {extractReady && (
-        <button onClick={extract} style={ui.extractBtn}>
-          🚪 Extract — Secure Your Loot!
-        </button>
-      )}
     </div>
   );
 }
 
 const ui: Record<string, React.CSSProperties> = {
-  loot: {
-    position: 'absolute', top: 8, left: 8,
-    background: 'rgba(15,15,35,0.85)', border: '1px solid #3a3a50',
-    borderRadius: 8, padding: '5px 10px', color: '#facc15', fontSize: 12,
+  topBar: {
+    position: 'absolute', top: 8, left: 8, right: 8,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     pointerEvents: 'none',
   },
-  hint: {
-    position: 'absolute', top: 8, right: 8,
-    color: 'rgba(120,120,160,0.5)', fontSize: 10, pointerEvents: 'none',
+  depth: {
+    background: 'rgba(15,15,35,0.85)', border: '1px solid #3a3a50',
+    borderRadius: 8, padding: '4px 10px', color: '#c9b0ff', fontSize: 12, fontWeight: 700,
+  },
+  loot: {
+    background: 'rgba(15,15,35,0.85)', border: '1px solid #3a3a50',
+    borderRadius: 8, padding: '4px 10px', color: '#facc15', fontSize: 12,
+  },
+  finalHint: {
+    position: 'absolute', top: 40, left: '50%', transform: 'translateX(-50%)',
+    background: 'rgba(20,83,45,0.9)', border: '1px solid #4ade80', borderRadius: 8,
+    padding: '5px 12px', color: '#4ade80', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none',
   },
   error: {
-    position: 'absolute', top: 40, left: '50%', transform: 'translateX(-50%)',
+    position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)',
     background: '#3b1a1a', border: '1px solid #f87171', borderRadius: 8,
-    padding: '6px 14px', color: '#f87171', fontSize: 12, whiteSpace: 'nowrap',
-    pointerEvents: 'none',
-  },
-  extractBtn: {
-    position: 'absolute', bottom: 100, left: '50%', transform: 'translateX(-50%)',
-    background: '#14532d', border: '2px solid #4ade80', borderRadius: 12,
-    color: '#4ade80', fontSize: 15, fontWeight: 700, padding: '13px 28px',
-    cursor: 'pointer', whiteSpace: 'nowrap',
+    padding: '6px 14px', color: '#f87171', fontSize: 12, whiteSpace: 'nowrap', pointerEvents: 'none',
   },
 };

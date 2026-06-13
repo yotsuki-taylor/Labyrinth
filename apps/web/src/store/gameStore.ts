@@ -41,9 +41,9 @@ interface GameState {
   loadPlayerState: () => Promise<void>;
   upgradeBuilding: (buildingType: string) => Promise<void>;
   startExpedition: (heroIds: string[]) => Promise<void>;
-  moveToNode: (targetNodeId: string) => Promise<void>;
+  collectPickup: (pickupId: string) => Promise<void>;
+  enterExit: (exitId: string) => Promise<void>;
   performCombatAction: (action: string, targetId?: string) => Promise<void>;
-  extract: () => Promise<void>;
   refreshCombat: (combatId: string) => Promise<void>;
   reviveHero: (heroId: string) => Promise<void>;
 }
@@ -114,19 +114,33 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
   },
 
-  moveToNode: async (targetNodeId) => {
+  // Collecting a pickup is a high-frequency action; keep it light (no global loading).
+  collectPickup: async (pickupId) => {
+    const { expedition } = get();
+    if (!expedition) return;
+    try {
+      const result = await engine.collectPickup(pickupId);
+      set({ expedition: result.expedition });
+    } catch (e) {
+      set({ error: (e as Error).message });
+    }
+  },
+
+  enterExit: async (exitId) => {
     const { expedition } = get();
     if (!expedition) return;
     set({ loading: true, error: null });
     try {
-      const result = await engine.move(targetNodeId);
-      set({ expedition: result.expedition });
-
-      if (result.event === 'combat_started' && result.combatId) {
-        const combat = engine.getCombat(result.combatId);
-        set({ combat, screen: 'combat' });
-      } else if (result.event === 'exited') {
-        set({ screen: 'labyrinth_run' }); // Will show extract button
+      const result = await engine.enterExit(exitId);
+      if (result.extracted && result.extract) {
+        set({
+          expedition: null,
+          screen: 'results',
+          lastResult: { success: result.extract.success, loot: result.extract.lootGained, message: result.extract.message },
+        });
+        await get().loadPlayerState();
+      } else {
+        set({ expedition: result.expedition });
       }
     } catch (e) {
       set({ error: (e as Error).message });
@@ -152,29 +166,10 @@ export const useGameStore = create<GameState>((set, get) => ({
           screen: 'results',
           combat: null,
           expedition: null,
-          lastResult: { success: false, loot: {}, message: 'Your party was defeated. All loot lost.' },
+          lastResult: { success: false, loot: {}, message: 'Your hero fell in the labyrinth. All loot lost.' },
         });
         await get().loadPlayerState();
       }
-    } catch (e) {
-      set({ error: (e as Error).message });
-    } finally {
-      set({ loading: false });
-    }
-  },
-
-  extract: async () => {
-    const { expedition } = get();
-    if (!expedition) return;
-    set({ loading: true, error: null });
-    try {
-      const result = await engine.extract();
-      set({
-        screen: 'results',
-        expedition: null,
-        lastResult: { success: result.success, loot: result.lootGained, message: result.message },
-      });
-      await get().loadPlayerState();
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
