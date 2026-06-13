@@ -43,6 +43,7 @@ interface GameState {
   startExpedition: (heroIds: string[]) => Promise<void>;
   collectPickup: (pickupId: string) => Promise<void>;
   enterExit: (exitId: string) => Promise<void>;
+  heroDefeated: () => Promise<void>;
   performCombatAction: (action: string, targetId?: string) => Promise<void>;
   refreshCombat: (combatId: string) => Promise<void>;
   reviveHero: (heroId: string) => Promise<void>;
@@ -121,6 +122,20 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       const result = await engine.collectPickup(pickupId);
       set({ expedition: result.expedition });
+    } catch (e) {
+      set({ error: (e as Error).message });
+    }
+  },
+
+  heroDefeated: async () => {
+    try {
+      const result = await engine.heroDefeated();
+      set({
+        expedition: null,
+        screen: 'results',
+        lastResult: { success: false, loot: result.lootGained, message: result.message },
+      });
+      await get().loadPlayerState();
     } catch (e) {
       set({ error: (e as Error).message });
     }

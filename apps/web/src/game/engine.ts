@@ -472,6 +472,28 @@ class GameEngine {
     return { resources: { ...this.save.resources }, heroes: this.save.heroes.map((h) => heroToDTO(h, forge)) };
   }
 
+  /** Persist current hero HP without triggering a full save cycle. Called before room transitions. */
+  syncHeroHp(hp: number): void {
+    const e = this.save.expedition;
+    if (!e) return;
+    const hero = this.save.heroes.find(h => h.id === e.heroId);
+    if (hero) hero.hp = Math.max(0, hp);
+  }
+
+  /** Hero killed by a monster: mark dead, set revive timer, clear expedition. */
+  async heroDefeated(): Promise<{ message: string; lootGained: Partial<ResourceMap> }> {
+    const e = this.save.expedition;
+    if (!e) return { message: 'Hero fell in battle.', lootGained: {} };
+    const barracks = this.bldLevel('barracks');
+    const reviveMs = REVIVE_TIME_MS * Math.max(0.2, 1 - (barracks - 1) * 0.2);
+    const hero = this.save.heroes.find(h => h.id === e.heroId);
+    if (hero) { hero.hp = 0; hero.isAlive = false; hero.reviveAt = Date.now() + reviveMs; }
+    this.save.expedition = null;
+    this.save.combat = null;
+    await this.persist();
+    return { message: 'Your hero fell in battle. All loot lost.', lootGained: {} };
+  }
+
   async extract(): Promise<ExtractResult> {
     const e = this.save.expedition;
     if (!e || e.status !== 'active') throw new Error('Expedition already ended');
