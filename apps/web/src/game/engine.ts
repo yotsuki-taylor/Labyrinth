@@ -499,6 +499,18 @@ class GameEngine {
     return { message: 'Your hero fell in battle. All loot lost.', lootGained: {} };
   }
 
+  /** Returns true if a local save already exists (can be called before init). */
+  hasSave(): boolean {
+    return loadLocal() !== null;
+  }
+
+  /** Wipes any existing save and starts a brand-new game. */
+  async resetGame(): Promise<void> {
+    this.save = createNewSave();
+    this.ready = true;
+    await this.persist();
+  }
+
   async extract(): Promise<ExtractResult> {
     const e = this.save.expedition;
     if (!e || e.status !== 'active') throw new Error('Expedition already ended');

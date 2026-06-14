@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useGameStore } from './store/gameStore.js';
 import { ResourceBar } from './components/ResourceBar.js';
+import { StartMenuScreen } from './screens/StartMenuScreen.js';
 import { BaseScreen } from './screens/BaseScreen.js';
 import { ExpeditionPrepScreen } from './screens/ExpeditionPrepScreen.js';
 import { LabyrinthRunScreen } from './screens/LabyrinthRunScreen.js';
@@ -29,9 +30,13 @@ export function App() {
     );
   }
 
+  if (screen === 'start') {
+    return <StartMenuScreen />;
+  }
+
   return (
     <div style={appStyle}>
-      {screen !== 'results' && screen !== 'combat' && (
+      {screen !== 'results' && screen !== 'combat' && screen !== 'labyrinth_run' && (
         <ResourceBar resources={resources} />
       )}
       {screen === 'base' && <BaseScreen />}

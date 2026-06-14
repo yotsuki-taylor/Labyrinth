@@ -9,6 +9,7 @@ import type {
 } from '@labyrinth/shared';
 
 export type Screen =
+  | 'start'
   | 'base'
   | 'expedition_prep'
   | 'labyrinth_run'
@@ -36,9 +37,11 @@ interface GameState {
   // Loading / errors
   loading: boolean;
   error: string | null;
+  hasSave: boolean;
 
   // Actions
   loadPlayerState: () => Promise<void>;
+  newGame: () => Promise<void>;
   upgradeBuilding: (buildingType: string) => Promise<void>;
   startExpedition: (heroIds: string[]) => Promise<void>;
   collectPickup: (pickupId: string) => Promise<void>;
@@ -65,18 +68,43 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   loading: false,
   error: null,
+  hasSave: false,
 
   loadPlayerState: async () => {
     set({ loading: true, error: null });
     try {
+      const hasSave = engine.hasSave();
       await engine.init();
       const state = engine.getState();
       set({
+        hasSave,
         playerId: state.playerId,
         username: state.username,
         resources: state.resources,
         heroes: state.heroes,
         buildings: state.buildings,
+        screen: 'start',
+      });
+    } catch (e) {
+      set({ error: (e as Error).message });
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  newGame: async () => {
+    set({ loading: true, error: null });
+    try {
+      await engine.resetGame();
+      const state = engine.getState();
+      set({
+        hasSave: false,
+        playerId: state.playerId,
+        username: state.username,
+        resources: state.resources,
+        heroes: state.heroes,
+        buildings: state.buildings,
+        screen: 'base',
       });
     } catch (e) {
       set({ error: (e as Error).message });
