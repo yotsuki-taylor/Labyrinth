@@ -167,8 +167,10 @@ export function LabyrinthRunScreen() {
   const skillLongTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skillLongFired = useRef(false);
   // Particle system
-  const particlesRef       = useRef<Particle[]>([]);
+  const particlesRef        = useRef<Particle[]>([]);
   const spawnParticlesFnRef = useRef<(wx: number, wy: number, rgb: string, dmg?: number) => void>(() => {});
+  // Camera shake — current intensity in screen pixels, decays to 0 each frame
+  const shakeRef            = useRef(0);
   // Defeat guard
   const defeatedRef    = useRef(false);
 
@@ -206,6 +208,7 @@ export function LabyrinthRunScreen() {
     attackCoolRef.current = 0;
     monstersRef.current    = spawnMonsters(expedition.room);
     particlesRef.current   = [];
+    shakeRef.current       = 0;
 
     // Init hero HP from store on expedition start; preserve across rooms.
     const hero = heroes.find(h => h.id === expedition.heroId);
@@ -242,6 +245,7 @@ export function LabyrinthRunScreen() {
           m.hp -= dmg;
           m.hitFlash = 1;
           spawnParticlesFnRef.current(m.x, m.y, '210,160,255', dmg);
+          shakeRef.current = Math.max(shakeRef.current, 5);
           if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); }
         }
       }
@@ -803,6 +807,7 @@ export function LabyrinthRunScreen() {
             nearest.hp -= heroStatsRef.current.attack;
             nearest.hitFlash = 1;
             spawnParticlesFnRef.current(nearest.x, nearest.y, '255,120,50', heroStatsRef.current.attack);
+            shakeRef.current = Math.max(shakeRef.current, 3);
             if (nearest.hp <= 0) {
               nearest.dead = true;
               nearest.deadAt = performance.now();
@@ -843,6 +848,7 @@ export function LabyrinthRunScreen() {
             const dmgTaken = m.attack;
             heroHpRef.current = Math.max(0, heroHpRef.current - dmgTaken);
             spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmgTaken);
+            shakeRef.current = Math.max(shakeRef.current, 8);
             if (heroHpRef.current <= 0) doHeroDefeated();
           }
         }
@@ -859,8 +865,18 @@ export function LabyrinthRunScreen() {
       skillFlash.current = Math.max(0, skillFlash.current - dt);
 
       // ── Render ──
+      // Decay and sample camera shake
+      shakeRef.current = Math.max(0, shakeRef.current - dt * 24);
+      const sk = shakeRef.current;
+      const shakeX = sk > 0.3 ? (Math.random() - 0.5) * 2 * sk : 0;
+      const shakeY = sk > 0.3 ? (Math.random() - 0.5) * sk : 0;
+
       ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = '#07070f'; ctx.fillRect(0, 0, W, H);
+
+      // World (shakes)
+      ctx.save();
+      ctx.translate(shakeX, shakeY);
       drawFloor();
       drawEntrance(t);
       drawExits(t);
@@ -868,6 +884,9 @@ export function LabyrinthRunScreen() {
       drawMonsters(t);
       drawPlayer(t);
       drawParticles(dt);
+      ctx.restore();
+
+      // UI (stable)
       drawHeroHpBar();
       drawJoystick();
       drawButtons();
