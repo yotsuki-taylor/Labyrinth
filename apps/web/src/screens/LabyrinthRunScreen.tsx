@@ -30,6 +30,17 @@ const MONSTER_BASE: Record<MonsterType, Omit<Monster, 'id'|'x'|'y'|'lastAttackAt
 };
 const MONSTER_ICON: Record<MonsterType, string> = { skeleton: '☠️', wolf: '🐺', golem: '🗿' };
 
+// ── Particle system ────────────────────────────────────────────────────────
+interface Particle {
+  sx: number; sy: number; // screen-space position (px)
+  vx: number; vy: number; // velocity (px/s)
+  life: number;           // 0→1 remaining life (1 = just spawned)
+  decay: number;          // lifetime lost per second
+  r: number;              // dot radius (0 = text particle)
+  rgb: string;            // e.g. '255,120,50'
+  text?: string;          // floating damage number
+}
+
 // Spawn counts per room type: [min, max]
 const MONSTER_COUNTS: Record<string, [number, number]> = {
   start: [0, 0], empty: [0, 1], loot: [1, 3], treasure: [2, 4],
@@ -155,6 +166,9 @@ export function LabyrinthRunScreen() {
   const [skillTooltip, setSkillTooltip] = useState(false);
   const skillLongTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skillLongFired = useRef(false);
+  // Particle system
+  const particlesRef       = useRef<Particle[]>([]);
+  const spawnParticlesFnRef = useRef<(wx: number, wy: number, rgb: string, dmg?: number) => void>(() => {});
   // Defeat guard
   const defeatedRef    = useRef(false);
 
@@ -190,7 +204,8 @@ export function LabyrinthRunScreen() {
     nearPickupRef.current = null;
     nearEnemyRef.current  = null;
     attackCoolRef.current = 0;
-    monstersRef.current   = spawnMonsters(expedition.room);
+    monstersRef.current    = spawnMonsters(expedition.room);
+    particlesRef.current   = [];
 
     // Init hero HP from store on expedition start; preserve across rooms.
     const hero = heroes.find(h => h.id === expedition.heroId);
@@ -226,6 +241,7 @@ export function LabyrinthRunScreen() {
         if (inRange) {
           m.hp -= dmg;
           m.hitFlash = 1;
+          spawnParticlesFnRef.current(m.x, m.y, '210,160,255', dmg);
           if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); }
         }
       }
@@ -309,6 +325,39 @@ export function LabyrinthRunScreen() {
         sy: (tx + ty - (cam.x + cam.y)) * (TH / 2) + H * 0.55,
       };
     }
+
+    spawnParticlesFnRef.current = (wx, wy, rgb, dmg) => {
+      const { sx, sy } = toScreen(wx, wy);
+      const footY = sy + TH / 2;
+      const count = 7;
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 60 + Math.random() * 90;
+        particlesRef.current.push({
+          sx: sx + (Math.random() - 0.5) * TW * 0.18,
+          sy: footY - TH * 0.25 + (Math.random() - 0.5) * TH * 0.25,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed * 0.45 - 65,
+          life: 1,
+          decay: 1.5 + Math.random() * 1.0,
+          r: 2.5 + Math.random() * 3.5,
+          rgb,
+        });
+      }
+      if (dmg !== undefined) {
+        particlesRef.current.push({
+          sx: sx + (Math.random() - 0.5) * 14,
+          sy: footY - TH * 0.6,
+          vx: (Math.random() - 0.5) * 18,
+          vy: -95,
+          life: 1,
+          decay: 1.05,
+          r: 0,
+          rgb,
+          text: `-${dmg}`,
+        });
+      }
+    };
 
     const inRoom = (x: number, y: number) =>
       x >= 0 && x <= RW - 1 && y >= 0 && y <= RH - 1;
@@ -573,6 +622,37 @@ export function LabyrinthRunScreen() {
       ctx.fillText(`❤️ ${hp} / ${maxHp}`, cx, by + 8);
     }
 
+    function drawParticles(dt: number) {
+      const pts = particlesRef.current;
+      ctx.save();
+      for (let i = pts.length - 1; i >= 0; i--) {
+        const pt = pts[i];
+        pt.life -= pt.decay * dt;
+        if (pt.life <= 0) { pts.splice(i, 1); continue; }
+        pt.sx += pt.vx * dt;
+        pt.sy += pt.vy * dt;
+        pt.vy += 140 * dt; // gravity
+        const alpha = Math.min(1, pt.life * 1.5);
+        if (pt.text) {
+          const sz = Math.round(11 + 6 * (1 - pt.life));
+          ctx.font = `700 ${sz}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = `rgba(${pt.rgb},${alpha.toFixed(2)})`;
+          ctx.strokeStyle = `rgba(0,0,0,${(alpha * 0.6).toFixed(2)})`;
+          ctx.lineWidth = 2.5;
+          ctx.strokeText(pt.text, pt.sx, pt.sy);
+          ctx.fillText(pt.text, pt.sx, pt.sy);
+        } else {
+          ctx.beginPath();
+          ctx.arc(pt.sx, pt.sy, Math.max(0.5, pt.r * pt.life), 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${pt.rgb},${alpha.toFixed(2)})`;
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
     function drawJoystick() {
       const joy = joyRef.current;
       if (joy.active) {
@@ -722,6 +802,7 @@ export function LabyrinthRunScreen() {
             attackCoolRef.current = ATTACK_CD;
             nearest.hp -= heroStatsRef.current.attack;
             nearest.hitFlash = 1;
+            spawnParticlesFnRef.current(nearest.x, nearest.y, '255,120,50', heroStatsRef.current.attack);
             if (nearest.hp <= 0) {
               nearest.dead = true;
               nearest.deadAt = performance.now();
@@ -759,7 +840,9 @@ export function LabyrinthRunScreen() {
           const msSinceAtk = performance.now() - m.lastAttackAt;
           if (dist < 1.0 && msSinceAtk >= 1000 / m.attackRate) {
             m.lastAttackAt = performance.now();
-            heroHpRef.current = Math.max(0, heroHpRef.current - m.attack);
+            const dmgTaken = m.attack;
+            heroHpRef.current = Math.max(0, heroHpRef.current - dmgTaken);
+            spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmgTaken);
             if (heroHpRef.current <= 0) doHeroDefeated();
           }
         }
@@ -784,6 +867,7 @@ export function LabyrinthRunScreen() {
       drawPickups(t);
       drawMonsters(t);
       drawPlayer(t);
+      drawParticles(dt);
       drawHeroHpBar();
       drawJoystick();
       drawButtons();
