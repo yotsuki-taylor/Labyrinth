@@ -41,6 +41,7 @@ interface GameState {
 
   // Actions
   loadPlayerState: () => Promise<void>;
+  refreshPlayerState: () => void;
   newGame: () => Promise<void>;
   upgradeBuilding: (buildingType: string) => Promise<void>;
   startExpedition: (heroIds: string[]) => Promise<void>;
@@ -90,6 +91,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     } finally {
       set({ loading: false });
     }
+  },
+
+  refreshPlayerState: () => {
+    const state = engine.getState();
+    set({ resources: state.resources, heroes: state.heroes, buildings: state.buildings });
   },
 
   newGame: async () => {
@@ -158,12 +164,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   heroDefeated: async () => {
     try {
       const result = await engine.heroDefeated();
+      get().refreshPlayerState();
       set({
         expedition: null,
         screen: 'results',
         lastResult: { success: false, loot: result.lootGained, message: result.message },
       });
-      await get().loadPlayerState();
     } catch (e) {
       set({ error: (e as Error).message });
     }
@@ -176,12 +182,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       const result = await engine.enterExit(exitId);
       if (result.extracted && result.extract) {
+        get().refreshPlayerState();
         set({
           expedition: null,
           screen: 'results',
           lastResult: { success: result.extract.success, loot: result.extract.lootGained, message: result.extract.message },
         });
-        await get().loadPlayerState();
       } else {
         set({ expedition: result.expedition });
       }
@@ -205,13 +211,13 @@ export const useGameStore = create<GameState>((set, get) => ({
         const state = engine.getState();
         set({ expedition, screen: 'labyrinth_run', combat: null, heroes: state.heroes, resources: state.resources });
       } else if (result.combat.status === 'defeat') {
+        get().refreshPlayerState();
         set({
           screen: 'results',
           combat: null,
           expedition: null,
           lastResult: { success: false, loot: {}, message: 'Your hero fell in the labyrinth. All loot lost.' },
         });
-        await get().loadPlayerState();
       }
     } catch (e) {
       set({ error: (e as Error).message });
