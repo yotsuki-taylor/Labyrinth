@@ -60,7 +60,7 @@ export const HERO_TEMPLATES: Record<HeroClass, HeroTemplateConfig> = {
     class: 'cleric',
     label: 'Cleric',
     description: 'Holy support. Heals allies and sustains the party.',
-    ability: 'Field Heal — restores 25 HP to the hero with lowest HP.',
+    ability: 'Field Heal — restores 25 HP.',
     baseStats: { hp: 75, maxHp: 75, attack: 10, defense: 10, speed: 9 },
   },
   assassin: {
