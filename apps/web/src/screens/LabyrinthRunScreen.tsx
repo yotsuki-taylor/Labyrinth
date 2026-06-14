@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useGameStore } from '../store/gameStore.js';
 import { engine } from '../game/engine.js';
+import { HERO_TEMPLATES } from '@labyrinth/shared';
 import type { ExpeditionDTO, RoomType, HeroStats } from '@labyrinth/shared';
 
 // ── Monster types ──────────────────────────────────────────────────────────
@@ -150,6 +151,10 @@ export function LabyrinthRunScreen() {
   const skillCool      = useRef(0);
   const skillFlash     = useRef(0);
   const skillTid       = useRef(-1);
+  // Skill tooltip (long-press on mobile, hover on desktop)
+  const [skillTooltip, setSkillTooltip] = useState(false);
+  const skillLongTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skillLongFired = useRef(false);
   // Defeat guard
   const defeatedRef    = useRef(false);
 
@@ -808,7 +813,14 @@ export function LabyrinthRunScreen() {
         interactHeld.current = true; interactTid.current = touch.identifier; continue;
       }
       if (Math.hypot(cx - (CW - 65), cy - (CH - 170)) < 46) {
-        triggerSkill(); skillTid.current = touch.identifier; continue;
+        skillTid.current = touch.identifier;
+        skillLongFired.current = false;
+        if (skillLongTimer.current !== null) clearTimeout(skillLongTimer.current);
+        skillLongTimer.current = setTimeout(() => {
+          skillLongFired.current = true;
+          setSkillTooltip(true);
+        }, 450);
+        continue;
       }
       if (cx < CW * 0.6 && cy > CH * 0.45) {
         joyRef.current = { active: true, baseX: cx, baseY: cy, dx: 0, dy: 0, tid: touch.identifier };
@@ -835,9 +847,26 @@ export function LabyrinthRunScreen() {
       if (touch.identifier === interactTid.current) {
         interactHeld.current = false; interactTid.current = -1; interactProg.current = 0;
       }
-      if (touch.identifier === skillTid.current) skillTid.current = -1;
+      if (touch.identifier === skillTid.current) {
+        skillTid.current = -1;
+        if (skillLongTimer.current !== null) { clearTimeout(skillLongTimer.current); skillLongTimer.current = null; }
+        if (!skillLongFired.current) triggerSkill();
+        else setSkillTooltip(false);
+        skillLongFired.current = false;
+      }
     }
+  }, [triggerSkill]);
+
+  const onMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current; if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scX = canvas.width / rect.width, scY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scX;
+    const cy = (e.clientY - rect.top)  * scY;
+    setSkillTooltip(Math.hypot(cx - (canvas.width - 65), cy - (canvas.height - 170)) < 46);
   }, []);
+
+  const onMouseLeave = useCallback(() => setSkillTooltip(false), []);
 
   if (!expedition) {
     return (
@@ -862,6 +891,7 @@ export function LabyrinthRunScreen() {
         style={{ display: 'block', touchAction: 'none' }}
         onTouchStart={onTouchStart} onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}     onTouchCancel={onTouchEnd}
+        onMouseMove={onMouseMove}   onMouseLeave={onMouseLeave}
       />
       <div style={ui.topBar}>
         <span style={ui.depth}>Room {expedition.depth + 1} / {expedition.maxDepth}</span>
@@ -873,6 +903,15 @@ export function LabyrinthRunScreen() {
         <div style={ui.finalHint}>🚪 Both doors lead to extraction — secure your loot!</div>
       )}
       {error && <div style={ui.error}>{error}</div>}
+      {skillTooltip && heroClass && (
+        <div style={ui.skillTooltip}>
+          <div style={ui.skillTooltipTitle}>
+            {SKILL_ICON[heroClass]} {HERO_TEMPLATES[heroClass].label} — Skill
+          </div>
+          <div style={ui.skillTooltipBody}>{HERO_TEMPLATES[heroClass].ability}</div>
+          <div style={ui.skillTooltipCd}>Cooldown: {SKILL_CD}s</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -900,5 +939,21 @@ const ui: Record<string, React.CSSProperties> = {
     position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)',
     background: '#3b1a1a', border: '1px solid #f87171', borderRadius: 8,
     padding: '6px 14px', color: '#f87171', fontSize: 12, whiteSpace: 'nowrap', pointerEvents: 'none',
+  },
+  skillTooltip: {
+    position: 'absolute', right: 10, bottom: 218,
+    maxWidth: 190,
+    background: 'rgba(10,8,24,0.96)', border: '1px solid #5b3a9c',
+    borderRadius: 10, padding: '10px 12px', pointerEvents: 'none',
+    boxShadow: '0 4px 18px rgba(0,0,0,0.6)',
+  },
+  skillTooltipTitle: {
+    color: '#c9b0ff', fontWeight: 700, fontSize: 12, marginBottom: 5,
+  },
+  skillTooltipBody: {
+    color: '#b0a0d0', fontSize: 11, lineHeight: 1.45, fontStyle: 'italic', marginBottom: 5,
+  },
+  skillTooltipCd: {
+    color: '#6a5a80', fontSize: 10,
   },
 };
