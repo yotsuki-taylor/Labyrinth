@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useGameStore } from '../store/gameStore.js';
 import { HERO_TEMPLATES } from '@labyrinth/shared';
 import type { HeroDTO } from '@labyrinth/shared';
@@ -6,8 +6,29 @@ import type { HeroDTO } from '@labyrinth/shared';
 export function ExpeditionPrepScreen() {
   const { heroes, startExpedition, setScreen, loading, error } = useGameStore();
   const [selected, setSelected] = useState<string | null>(null);
+  const [scroll, setScroll] = useState({ prog: 0, thumbW: 0.5 });
+  const listRef = useRef<HTMLDivElement>(null);
 
   const aliveHeroes = heroes.filter((h) => h.isAlive);
+
+  // Compute initial thumb size once the list mounts / heroes change.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) setScroll(s => ({ ...s, thumbW: Math.min(1, el.clientWidth / el.scrollWidth) }));
+  }, [aliveHeroes.length]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    const max = el.scrollWidth - el.clientWidth;
+    setScroll({
+      prog: max > 0 ? el.scrollLeft / max : 0,
+      thumbW: Math.min(1, el.clientWidth / el.scrollWidth),
+    });
+  }
+
+  const showScrollbar = scroll.thumbW < 0.99;
+  // thumb left = prog * (1 - thumbW) expressed as % of track width
+  const thumbLeft = scroll.prog * (1 - scroll.thumbW) * 100;
 
   return (
     <div style={s.page}>
@@ -17,7 +38,7 @@ export function ExpeditionPrepScreen() {
 
       {error && <div style={s.error}>{error}</div>}
 
-      <div style={s.list}>
+      <div ref={listRef} style={s.list} onScroll={handleScroll}>
         {aliveHeroes.length === 0 && (
           <div style={s.empty}>All heroes are recovering. Wait or revive them from Base.</div>
         )}
@@ -30,6 +51,12 @@ export function ExpeditionPrepScreen() {
           />
         ))}
       </div>
+
+      {showScrollbar && (
+        <div style={s.scrollTrack}>
+          <div style={{ ...s.scrollThumb, width: `${scroll.thumbW * 100}%`, left: `${thumbLeft}%` }} />
+        </div>
+      )}
 
       <button
         style={{ ...s.startBtn, opacity: selected && !loading ? 1 : 0.4 }}
@@ -117,12 +144,28 @@ const s: Record<string, React.CSSProperties> = {
     overflowX: 'auto',
     scrollSnapType: 'x mandatory',
     WebkitOverflowScrolling: 'touch',
-    paddingBottom: 8,
-    marginBottom: 20,
-    // Hide scrollbar
+    paddingBottom: 4,
+    marginBottom: 10,
     scrollbarWidth: 'none',
     msOverflowStyle: 'none',
   } as React.CSSProperties,
+
+  scrollTrack: {
+    position: 'relative',
+    height: 4,
+    background: '#1e1a30',
+    borderRadius: 2,
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  scrollThumb: {
+    position: 'absolute',
+    top: 0,
+    height: '100%',
+    background: 'linear-gradient(90deg, #5b3a9c, #8b5cf6)',
+    borderRadius: 2,
+    transition: 'left 0.12s ease-out, width 0.15s',
+  },
 
   empty: { color: '#7a7a9a', fontSize: 14, padding: 20, textAlign: 'center', flex: 1 },
 
