@@ -62,14 +62,18 @@ function spawnMonsters(room: ExpeditionDTO['room']): Monster[] {
   const scale = 1 + depth * 0.12;
   const used = new Set<string>();
   const out: Monster[] = [];
-  for (let i = 0; i < count * 12 && out.length < count; i++) {
+  // Keep aggro circles from overlapping, so the player can only be inside
+  // one monster's aggro range at a time (no multi-pulls).
+  for (let i = 0; i < count * 60 && out.length < count; i++) {
     const x = ri(2, width - 3);
     const y = ri(2, height - 5);
     const key = `${x},${y}`;
     if (used.has(key)) continue;
-    used.add(key);
     const mType = pool[Math.floor(Math.random() * pool.length)];
     const base = MONSTER_BASE[mType];
+    const tooClose = out.some((o) => Math.hypot(o.x - x, o.y - y) < o.aggroRange + base.aggroRange);
+    if (tooClose) continue;
+    used.add(key);
     out.push({
       ...base,
       id: `m${i}_${Date.now()}`,
