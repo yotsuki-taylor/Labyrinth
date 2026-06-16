@@ -22,6 +22,11 @@ declare global {
           getItem: (key: string, cb: (err: Error | null, value: string | null) => void) => void;
           setItem: (key: string, value: string, cb?: (err: Error | null, ok: boolean) => void) => void;
         };
+        HapticFeedback?: {
+          impactOccurred: (style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft') => void;
+          notificationOccurred: (type: 'error' | 'success' | 'warning') => void;
+          selectionChanged: () => void;
+        };
       };
     };
   }

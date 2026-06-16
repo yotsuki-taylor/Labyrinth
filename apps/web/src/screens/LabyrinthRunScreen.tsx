@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useGameStore } from '../store/gameStore.js';
 import { engine } from '../game/engine.js';
+import { haptics } from '../game/haptics.js';
 import { HERO_TEMPLATES } from '@labyrinth/shared';
 import type { ExpeditionDTO, RoomType, HeroStats } from '@labyrinth/shared';
 
@@ -246,6 +247,7 @@ export function LabyrinthRunScreen() {
           m.hitFlash = 1;
           spawnParticlesFnRef.current(m.x, m.y, '210,160,255', dmg);
           shakeRef.current = Math.max(shakeRef.current, 5);
+          haptics.medium();
           if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); }
         }
       }
@@ -273,12 +275,14 @@ export function LabyrinthRunScreen() {
   const doCollect = useCallback((id: string) => {
     if (collectedRef.current.has(id)) return;
     collectedRef.current.add(id);
+    haptics.select();
     void collectPickup(id);
   }, [collectPickup]);
 
   const doExit = useCallback((id: string) => {
     if (busyRef.current) return;
     busyRef.current = true;
+    haptics.light();
     engine.syncHeroHp(heroHpRef.current);
     void enterExit(id);
   }, [enterExit]);
@@ -808,6 +812,7 @@ export function LabyrinthRunScreen() {
             nearest.hitFlash = 1;
             spawnParticlesFnRef.current(nearest.x, nearest.y, '255,120,50', heroStatsRef.current.attack);
             shakeRef.current = Math.max(shakeRef.current, 3);
+            haptics.light();
             if (nearest.hp <= 0) {
               nearest.dead = true;
               nearest.deadAt = performance.now();
@@ -849,7 +854,8 @@ export function LabyrinthRunScreen() {
             heroHpRef.current = Math.max(0, heroHpRef.current - dmgTaken);
             spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmgTaken);
             shakeRef.current = Math.max(shakeRef.current, 8);
-            if (heroHpRef.current <= 0) doHeroDefeated();
+            if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+            else haptics.heavy();
           }
         }
 

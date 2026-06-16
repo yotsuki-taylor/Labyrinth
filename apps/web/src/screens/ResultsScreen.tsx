@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { useGameStore } from '../store/gameStore.js';
+import { haptics } from '../game/haptics.js';
 
 const RES_ICON: Record<string, string> = {
   gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🔮',
@@ -10,6 +12,11 @@ export function ResultsScreen() {
   const success = lastResult?.success ?? false;
   const loot = lastResult?.loot ?? {};
   const lootEntries = (Object.entries(loot) as [string, number][]).filter(([, v]) => v > 0);
+
+  useEffect(() => {
+    if (success) haptics.success(); else haptics.error();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!success) {
     return (
