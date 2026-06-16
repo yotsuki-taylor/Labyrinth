@@ -305,7 +305,6 @@ export function LabyrinthRunScreen() {
 
     const TW = 180;
     const TH = TW / 2;
-    const WALL_H = TH * 2;   // side-face height in screen pixels
 
     const IBTN = { x: W - 65, y: H - 80,  r: 34 };
     const SBTN = { x: W - 65, y: H - 170, r: 34 };
@@ -390,42 +389,10 @@ export function LabyrinthRunScreen() {
       if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
     }
 
-    function drawWallBox(sx: number, sy: number) {
-      // Left face — NW side, shadow
-      ctx.beginPath();
-      ctx.moveTo(sx - TW / 2, sy + TH / 2);
-      ctx.lineTo(sx - TW / 2, sy + TH / 2 + WALL_H);
-      ctx.lineTo(sx,           sy + TH       + WALL_H);
-      ctx.lineTo(sx,           sy + TH);
-      ctx.closePath();
-      const lg = ctx.createLinearGradient(sx - TW / 2, sy, sx, sy + TH + WALL_H);
-      lg.addColorStop(0, '#252538'); lg.addColorStop(1, '#111118');
-      ctx.fillStyle = lg; ctx.fill();
-      ctx.strokeStyle = '#0e0e18'; ctx.lineWidth = 1; ctx.stroke();
-
-      // Right face — NE side, slightly lighter
-      ctx.beginPath();
-      ctx.moveTo(sx + TW / 2, sy + TH / 2);
-      ctx.lineTo(sx + TW / 2, sy + TH / 2 + WALL_H);
-      ctx.lineTo(sx,           sy + TH       + WALL_H);
-      ctx.lineTo(sx,           sy + TH);
-      ctx.closePath();
-      const rg = ctx.createLinearGradient(sx, sy, sx + TW / 2, sy + TH + WALL_H);
-      rg.addColorStop(0, '#38384e'); rg.addColorStop(1, '#1a1a26');
-      ctx.fillStyle = rg; ctx.fill();
-      ctx.strokeStyle = '#0e0e18'; ctx.lineWidth = 1; ctx.stroke();
-
-      // Top face — lit from above
-      ctx.beginPath();
-      ctx.moveTo(sx,           sy);
-      ctx.lineTo(sx + TW / 2,  sy + TH / 2);
-      ctx.lineTo(sx,           sy + TH);
-      ctx.lineTo(sx - TW / 2,  sy + TH / 2);
-      ctx.closePath();
-      const tg = ctx.createLinearGradient(sx - TW / 2, sy + TH / 2, sx + TW / 2, sy + TH / 2);
-      tg.addColorStop(0, '#4a4a62'); tg.addColorStop(0.5, '#545470'); tg.addColorStop(1, '#42425a');
-      ctx.fillStyle = tg; ctx.fill();
-      ctx.strokeStyle = '#2e2e42'; ctx.lineWidth = 1; ctx.stroke();
+    function drawPit(sx: number, sy: number) {
+      const pg = ctx.createRadialGradient(sx, sy + TH / 2, 2, sx, sy + TH / 2, TW / 2);
+      pg.addColorStop(0, '#000000'); pg.addColorStop(1, '#0a0a10');
+      drawDiamond(sx, sy, TW * 0.98, TH * 0.98, pg, '#000000');
     }
 
     function drawFloor() {
@@ -434,12 +401,10 @@ export function LabyrinthRunScreen() {
           const row = sum - col;
           if (row < 0 || row >= RH) continue;
           const { sx, sy } = toScreen(col, row);
-          if (sx < -TW || sx > W + TW || sy < -TH * 2 - WALL_H || sy > H + TH * 2) continue;
+          if (sx < -TW || sx > W + TW || sy < -TH * 2 || sy > H + TH * 2) continue;
 
           if (wallSet.has(`${col},${row}`)) {
-            // Dark base tile under wall
-            drawDiamond(sx, sy, TW * 0.98, TH * 0.98, '#0d0d18', '#0a0a14');
-            drawWallBox(sx, sy);
+            drawPit(sx, sy);
           } else {
             const g = ctx.createLinearGradient(sx, sy, sx, sy + TH);
             g.addColorStop(0, '#3c3c5a'); g.addColorStop(0.6, '#2a2a42'); g.addColorStop(1, '#191929');
