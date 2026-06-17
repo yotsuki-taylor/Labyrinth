@@ -183,15 +183,15 @@ const s: Record<string, React.CSSProperties> = {
   portraitWrap: {
     position: 'relative',
     width: '100%',
-    height: 160,
+    height: 288,
     background: '#12102a',
     overflow: 'hidden',
   },
   portrait: {
     width: '100%',
     height: '100%',
-    objectFit: 'cover',
-    objectPosition: 'top center',
+    objectFit: 'contain',
+    objectPosition: 'center bottom',
     display: 'block',
   },
   levelBadge: {
