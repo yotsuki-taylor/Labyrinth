@@ -373,6 +373,15 @@ class GameEngine {
     return { expedition: expeditionToDTO(e), resource: pk.resource, amount: pk.amount };
   }
 
+  /** Injects boss-drop pickups into the active expedition room so collectPickup handles them normally. */
+  addBossDrops(drops: Array<{ id: string; resource: ResourceType; amount: number; x: number; y: number }>): void {
+    const e = this.save.expedition;
+    if (!e || e.status !== 'active') return;
+    for (const d of drops) {
+      e.room.pickups.push({ ...d, collected: false });
+    }
+  }
+
   /** Walks through one of the two doors: either descends to a new room or extracts. */
   async enterExit(exitId: string): Promise<{ expedition: ExpeditionDTO | null; extracted: boolean; extract?: ExtractResult }> {
     const e = this.save.expedition;

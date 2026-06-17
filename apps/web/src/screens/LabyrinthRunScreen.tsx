@@ -3,7 +3,7 @@ import { useGameStore } from '../store/gameStore.js';
 import { engine } from '../game/engine.js';
 import { haptics } from '../game/haptics.js';
 import { HERO_TEMPLATES } from '@labyrinth/shared';
-import type { ExpeditionDTO, RoomType, HeroStats } from '@labyrinth/shared';
+import type { ExpeditionDTO, RoomType, HeroStats, ResourceType } from '@labyrinth/shared';
 
 // ── Monster types ──────────────────────────────────────────────────────────
 type MonsterType = 'skeleton' | 'wolf' | 'golem';
@@ -199,6 +199,7 @@ export function LabyrinthRunScreen() {
   const skillTid       = useRef(-1);
   // Skill tooltip (long-press on mobile, hover on desktop)
   const [skillTooltip, setSkillTooltip] = useState(false);
+  const [bossDefeated, setBossDefeated] = useState(false);
   const skillLongTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skillLongFired = useRef(false);
   // Particle system
@@ -245,6 +246,7 @@ export function LabyrinthRunScreen() {
     monstersRef.current    = spawnMonsters(expedition.room);
     particlesRef.current   = [];
     shakeRef.current       = 0;
+    setBossDefeated(false);
 
     // Init boss if this is a boss room
     if (expedition.room.type === 'boss') {
@@ -325,18 +327,7 @@ export function LabyrinthRunScreen() {
             nearBossRef.current = false;
             shakeRef.current = 20;
             haptics.success();
-            setTimeout(() => {
-              const exp2 = expRef.current;
-              if (!exp2) return;
-              const extractExit = exp2.room.exits[0];
-              if (extractExit) {
-                if (busyRef.current) return;
-                busyRef.current = true;
-                haptics.light();
-                engine.syncHeroHp(heroHpRef.current);
-                void enterExit(extractExit.id);
-              }
-            }, 2500);
+            spawnBossLoot(boss.x, boss.y);
           }
         }
       }
@@ -344,7 +335,8 @@ export function LabyrinthRunScreen() {
     if (heal > 0) {
       heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + heal);
     }
-  }, [enterExit]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const dn = (e: KeyboardEvent) => {
@@ -382,6 +374,22 @@ export function LabyrinthRunScreen() {
     busyRef.current = true;
     void heroDefeated();
   }, [heroDefeated]);
+
+  // Drops boss loot onto the floor after kill and injects it into the engine.
+  const spawnBossLoot = useCallback((bx: number, by: number) => {
+    const exp = expRef.current;
+    if (!exp) return;
+    const t = Date.now();
+    const drops: Array<{ id: string; resource: ResourceType; amount: number; x: number; y: number }> = [
+      { id: `bd0_${t}`, resource: 'relics',  amount: ri(2, 4),    x: bx,       y: by + 1   },
+      { id: `bd1_${t}`, resource: 'essence', amount: ri(6, 12),   x: bx - 1.5, y: by + 0.5 },
+      { id: `bd2_${t}`, resource: 'gold',    amount: ri(80, 150), x: bx + 1.5, y: by + 0.5 },
+      { id: `bd3_${t}`, resource: 'iron',    amount: ri(20, 40),  x: bx,       y: by + 2   },
+    ];
+    engine.addBossDrops(drops);
+    for (const d of drops) exp.room.pickups.push({ ...d, collected: false });
+    setBossDefeated(true);
+  }, []);
 
   // ─── Render loop ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1015,12 +1023,7 @@ export function LabyrinthRunScreen() {
               nearBossRef.current = false;
               shakeRef.current = 20;
               haptics.success();
-              setTimeout(() => {
-                const exp2 = expRef.current;
-                if (!exp2) return;
-                const extractExit = exp2.room.exits[0];
-                if (extractExit) doExit(extractExit.id);
-              }, 2500);
+              spawnBossLoot(bossRef.current.x, bossRef.current.y);
             }
           } else if (nearest === null && !nearBossRef.current && nearPk !== null) {
             // Collect channel
@@ -1303,7 +1306,11 @@ export function LabyrinthRunScreen() {
         )}
       </div>
       {expedition.room.isFinal && (
-        <div style={ui.finalHint}>👹 Defeat the Labyrinth Keeper to extract!</div>
+        <div style={ui.finalHint}>
+          {expedition.room.type === 'boss'
+            ? (bossDefeated ? '🚪 Collect the loot and exit!' : '👹 Defeat the Labyrinth Keeper to extract!')
+            : '🚪 Exit to extract!'}
+        </div>
       )}
       {error && <div style={ui.error}>{error}</div>}
       {skillTooltip && heroClass && (
