@@ -26,8 +26,9 @@ function ri(min: number, max: number): number {
 /** Picks the type of a room reached by going one level deeper. */
 function rollRoomType(): RoomType {
   const r = Math.random();
-  if (r < 0.45) return 'loot';
-  if (r < 0.60) return 'treasure';
+  if (r < 0.35) return 'loot';
+  if (r < 0.47) return 'treasure';
+  if (r < 0.62) return 'ability';
   return 'empty';
 }
 
@@ -40,6 +41,7 @@ function pickupPlan(type: RoomType, depth: number): { count: number; rare: boole
     case 'loot':     return { count: ri(4, 6) + depthBonus, rare: false };
     case 'treasure': return { count: ri(3, 5) + depthBonus, rare: true };
     case 'boss':     return { count: 0, rare: false };
+    case 'ability':  return { count: ri(0, 2), rare: false };
   }
 }
 
@@ -95,7 +97,7 @@ function generateWalls(
   }
 
   const wallCount: Record<RoomType, [number, number]> = {
-    start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9], boss: [3, 5],
+    start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9], boss: [3, 5], ability: [1, 3],
   };
   const [mn, mx] = wallCount[type];
   const count = ri(mn, mx);

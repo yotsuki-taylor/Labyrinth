@@ -5,6 +5,21 @@ import { haptics } from '../game/haptics.js';
 import { HERO_TEMPLATES } from '@labyrinth/shared';
 import type { ExpeditionDTO, RoomType, HeroStats, ResourceType } from '@labyrinth/shared';
 
+// ── Ability system ─────────────────────────────────────────────────────────
+type AbilityId = 'bloodlust' | 'frenzy' | 'execute' | 'stone_skin' | 'thorns' | 'second_wind' | 'vampiric' | 'regeneration' | 'fortitude';
+const ABILITY_DEFS: Record<AbilityId, { name: string; category: 'attack'|'defense'|'health'; icon: string; desc: string }> = {
+  bloodlust:    { name: 'Bloodlust',    category: 'attack',  icon: '🩸', desc: 'Killing an enemy restores 10 HP.' },
+  frenzy:       { name: 'Frenzy',       category: 'attack',  icon: '⚡', desc: 'Attack cooldown reduced by 50%.' },
+  execute:      { name: 'Execute',      category: 'attack',  icon: '💀', desc: 'Deal +80% damage to enemies below 30% HP.' },
+  stone_skin:   { name: 'Stone Skin',   category: 'defense', icon: '🪨', desc: 'Reduce all incoming damage by 5 (min 1).' },
+  thorns:       { name: 'Thorns',       category: 'defense', icon: '🌵', desc: 'Reflect 25% of melee damage back to attacker.' },
+  second_wind:  { name: 'Second Wind',  category: 'defense', icon: '🛡️', desc: 'Once per run, survive a lethal hit with 1 HP.' },
+  vampiric:     { name: 'Vampiric',     category: 'health',  icon: '🧛', desc: 'Heal for 20% of all damage dealt.' },
+  regeneration: { name: 'Regeneration', category: 'health',  icon: '💚', desc: 'Passively regenerate 2 HP per second.' },
+  fortitude:    { name: 'Fortitude',    category: 'health',  icon: '❤️', desc: 'Gain +60 maximum and current HP.' },
+};
+const ALL_ABILITY_IDS = Object.keys(ABILITY_DEFS) as AbilityId[];
+
 // ── Monster types ──────────────────────────────────────────────────────────
 type MonsterType = 'skeleton' | 'wolf' | 'golem';
 
@@ -70,11 +85,11 @@ interface Boss {
 
 // Spawn counts per room type: [min, max]
 const MONSTER_COUNTS: Record<string, [number, number]> = {
-  start: [0, 0], empty: [0, 1], loot: [1, 3], treasure: [2, 4], boss: [0, 0],
+  start: [0, 0], empty: [0, 1], loot: [1, 3], treasure: [2, 4], boss: [0, 0], ability: [1, 2],
 };
 const MONSTER_POOL: Record<string, MonsterType[]> = {
   start: [], empty: ['skeleton'], loot: ['skeleton', 'wolf'],
-  treasure: ['skeleton', 'wolf', 'golem'], boss: [],
+  treasure: ['skeleton', 'wolf', 'golem'], boss: [], ability: ['skeleton', 'wolf'],
 };
 
 const ri = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a;
@@ -157,6 +172,7 @@ function roomPreviewIcon(type: RoomType, isExtract: boolean): string {
   if (type === 'boss') return '👹';
   if (type === 'loot') return '💰';
   if (type === 'treasure') return '💎';
+  if (type === 'ability') return '🔮';
   return '·';
 }
 
@@ -209,6 +225,15 @@ export function LabyrinthRunScreen() {
   const shakeRef            = useRef(0);
   // Defeat guard
   const defeatedRef    = useRef(false);
+  // Ability system
+  const activeAbilitiesRef = useRef<Set<AbilityId>>(new Set());
+  const secondWindUsedRef  = useRef(false);
+  const regenAccRef        = useRef(0);
+  const abilityOrbRef      = useRef<{ x: number; y: number; collected: boolean } | null>(null);
+  const orbInteractedRef   = useRef(false);
+
+  const [abilityChoice, setAbilityChoice]           = useState<[AbilityId, AbilityId] | null>(null);
+  const [activeAbilitiesState, setActiveAbilitiesState] = useState<AbilityId[]>([]);
 
   useEffect(() => { expRef.current = expedition; }, [expedition]);
 
@@ -269,6 +294,22 @@ export function LabyrinthRunScreen() {
       bossRef.current = null;
     }
 
+    // Reset ability orb
+    if (expedition.room.type === 'ability') {
+      abilityOrbRef.current = { x: expedition.room.width / 2, y: expedition.room.height / 2 - 1, collected: false };
+    } else {
+      abilityOrbRef.current = null;
+    }
+    orbInteractedRef.current = false;
+    regenAccRef.current = 0;
+
+    // Reset run-scoped ability state only at start of expedition
+    if (expedition.depth === 0) {
+      activeAbilitiesRef.current = new Set();
+      secondWindUsedRef.current = false;
+      setActiveAbilitiesState([]);
+    }
+
     // Init hero HP from store on expedition start; preserve across rooms.
     const hero = heroes.find(h => h.id === expedition.heroId);
     if (hero) {
@@ -297,17 +338,27 @@ export function LabyrinthRunScreen() {
 
     if (dmg > 0) {
       // Hit regular monsters
+      const skillAbs = activeAbilitiesRef.current;
+      let totalSkillVamp = 0;
       for (const m of monstersRef.current) {
         if (m.dead) continue;
         const dist = Math.hypot(p.x - m.x, p.y - m.y);
         const inRange = radius === 0 ? dist < ATTACK_R : dist < radius;
         if (inRange) {
-          m.hp -= dmg;
+          let skillDmg = dmg;
+          if (skillAbs.has('execute') && m.hp / m.maxHp < 0.3) skillDmg = Math.round(skillDmg * 1.8);
+          m.hp -= skillDmg;
           m.hitFlash = 1;
-          spawnParticlesFnRef.current(m.x, m.y, '210,160,255', dmg);
+          spawnParticlesFnRef.current(m.x, m.y, '210,160,255', skillDmg);
           shakeRef.current = Math.max(shakeRef.current, 5);
           haptics.medium();
-          if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); }
+          totalSkillVamp += skillDmg;
+          const killed = m.hp <= 0;
+          if (killed) {
+            m.dead = true;
+            m.deadAt = performance.now();
+            if (skillAbs.has('bloodlust')) heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + 10);
+          }
         }
       }
       // Hit boss if in range
@@ -316,11 +367,14 @@ export function LabyrinthRunScreen() {
         const dist = Math.hypot(p.x - boss.x, p.y - boss.y);
         const inRange = radius === 0 ? dist < ATTACK_R : dist < radius;
         if (inRange) {
-          boss.hp = Math.max(0, boss.hp - dmg);
+          let skillDmg = dmg;
+          if (skillAbs.has('execute') && boss.hp / boss.maxHp < 0.3) skillDmg = Math.round(skillDmg * 1.8);
+          boss.hp = Math.max(0, boss.hp - skillDmg);
           boss.hitFlash = 1;
-          spawnParticlesFnRef.current(boss.x, boss.y, '210,160,255', dmg);
+          spawnParticlesFnRef.current(boss.x, boss.y, '210,160,255', skillDmg);
           shakeRef.current = Math.max(shakeRef.current, 5);
           haptics.medium();
+          totalSkillVamp += skillDmg;
           if (boss.hp <= 0) {
             boss.dead = true;
             boss.deadAt = performance.now();
@@ -330,6 +384,10 @@ export function LabyrinthRunScreen() {
             spawnBossLoot(boss.x, boss.y);
           }
         }
+      }
+      // Vampiric on skill
+      if (skillAbs.has('vampiric') && totalSkillVamp > 0) {
+        heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + Math.round(totalSkillVamp * 0.2));
       }
     }
     if (heal > 0) {
@@ -375,6 +433,21 @@ export function LabyrinthRunScreen() {
     void heroDefeated();
   }, [heroDefeated]);
 
+  const showAbilityChoice = useCallback(() => {
+    const shuffled = [...ALL_ABILITY_IDS].sort(() => Math.random() - 0.5);
+    setAbilityChoice([shuffled[0], shuffled[1]]);
+  }, []);
+
+  const pickAbility = useCallback((id: AbilityId) => {
+    activeAbilitiesRef.current.add(id);
+    setActiveAbilitiesState(prev => [...prev, id]);
+    if (id === 'fortitude') {
+      heroMaxHpRef.current += 60;
+      heroHpRef.current = Math.min(heroHpRef.current + 60, heroMaxHpRef.current);
+    }
+    setAbilityChoice(null);
+  }, []);
+
   // Drops boss loot onto the floor after kill and injects it into the engine.
   const spawnBossLoot = useCallback((bx: number, by: number) => {
     const exp = expRef.current;
@@ -416,6 +489,7 @@ export function LabyrinthRunScreen() {
       loot:     { t0: '#183824', t1: '#102818', t2: '#08180e', stroke: '#0e2414', bg: '#02080a', pit: '#00060a', vignette: 'rgba(8,35,15,0.60)'   },
       treasure: { t0: '#38300a', t1: '#282205', t2: '#181402', stroke: '#261e04', bg: '#080600', pit: '#060400', vignette: 'rgba(55,40,0,0.60)'   },
       boss:     { t0: '#381010', t1: '#260808', t2: '#160404', stroke: '#240606', bg: '#080202', pit: '#060000', vignette: 'rgba(70,8,8,0.65)'    },
+      ability:  { t0: '#2a1848', t1: '#1e1038', t2: '#130c28', stroke: '#1e1040', bg: '#070410', pit: '#040010', vignette: 'rgba(80,20,120,0.60)' },
     };
     const PAL: Palette = PALETTES[expedition.room.type] ?? PALETTES.start;
 
@@ -692,6 +766,29 @@ export function LabyrinthRunScreen() {
         ctx.font = `${Math.round(TW * 0.5)}px sans-serif`;
         ctx.fillText(RES_ICON[pk.resource] ?? '💰', sx, sy - 6 + bob);
       }
+    }
+
+    function drawAbilityOrb(t: number) {
+      const orb = abilityOrbRef.current;
+      if (!orb || orb.collected) return;
+      const { sx, sy } = toScreen(orb.x, orb.y);
+      const bob = Math.sin(t * 2.5) * 6;
+      const pulse = 0.8 + 0.2 * Math.sin(t * 3);
+      // Glow
+      const grd = ctx.createRadialGradient(sx, sy - 10 + bob, 0, sx, sy - 10 + bob, TW * 0.55 * pulse);
+      grd.addColorStop(0, 'rgba(180,80,255,0.7)');
+      grd.addColorStop(0.5, 'rgba(120,40,200,0.3)');
+      grd.addColorStop(1, 'rgba(80,0,160,0)');
+      ctx.beginPath(); ctx.arc(sx, sy - 10 + bob, TW * 0.55 * pulse, 0, Math.PI * 2);
+      ctx.fillStyle = grd; ctx.fill();
+      // Shadow
+      ctx.beginPath();
+      ctx.ellipse(sx, sy + TH * 0.15, TW * 0.2, TH * 0.12, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fill();
+      // Orb icon
+      ctx.font = `${Math.round(TW * 0.55)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('🔮', sx, sy - 8 + bob);
     }
 
     function drawMonsters(t: number) {
@@ -1003,31 +1100,49 @@ export function LabyrinthRunScreen() {
 
         // ── Interact button action ──
         attackCoolRef.current = Math.max(0, attackCoolRef.current - dt);
+        // Near ability orb detection
+        const abilOrb = abilityOrbRef.current;
+        const nearOrb = abilOrb && !abilOrb.collected && Math.hypot(p.x - abilOrb.x, p.y - abilOrb.y) < PICKUP_R;
         if (interactHeld.current) {
           if (nearest !== null && attackCoolRef.current <= 0) {
             // Attack monster
-            attackCoolRef.current = ATTACK_CD;
-            const dmg = Math.max(1, Math.round(heroStatsRef.current.attack * (0.9 + Math.random() * 0.2)));
+            const effectiveAttackCd = activeAbilitiesRef.current.has('frenzy') ? ATTACK_CD * 0.5 : ATTACK_CD;
+            attackCoolRef.current = effectiveAttackCd;
+            const abs = activeAbilitiesRef.current;
+            let dmg = Math.max(1, Math.round(heroStatsRef.current.attack * (0.9 + Math.random() * 0.2)));
+            // Execute
+            if (abs.has('execute') && nearest.hp / nearest.maxHp < 0.3) dmg = Math.round(dmg * 1.8);
             nearest.hp -= dmg;
             nearest.hitFlash = 1;
             spawnParticlesFnRef.current(nearest.x, nearest.y, '255,120,50', dmg);
             shakeRef.current = Math.max(shakeRef.current, 3);
             haptics.light();
-            if (nearest.hp <= 0) {
+            const killed = nearest.hp <= 0;
+            if (killed) {
               nearest.dead = true;
               nearest.deadAt = performance.now();
               nearEnemyRef.current = null;
+              // Bloodlust
+              if (abs.has('bloodlust')) heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + 10);
             }
+            // Vampiric
+            if (abs.has('vampiric')) heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + Math.round(dmg * 0.2));
           } else if (nearBossRef.current && bossRef.current && !bossRef.current.dead && attackCoolRef.current <= 0) {
             // Attack boss
-            attackCoolRef.current = ATTACK_CD;
+            const effectiveAttackCd = activeAbilitiesRef.current.has('frenzy') ? ATTACK_CD * 0.5 : ATTACK_CD;
+            attackCoolRef.current = effectiveAttackCd;
+            const abs = activeAbilitiesRef.current;
             const stats = heroStatsRef.current;
-            const dmg = Math.max(1, Math.round(stats.attack * (0.9 + Math.random() * 0.2)));
+            let dmg = Math.max(1, Math.round(stats.attack * (0.9 + Math.random() * 0.2)));
+            // Execute
+            if (abs.has('execute') && bossRef.current.hp / bossRef.current.maxHp < 0.3) dmg = Math.round(dmg * 1.8);
             bossRef.current.hp = Math.max(0, bossRef.current.hp - dmg);
             bossRef.current.hitFlash = 1;
             spawnParticlesFnRef.current(bossRef.current.x, bossRef.current.y, '255,120,50', dmg);
             shakeRef.current = Math.max(shakeRef.current, 3);
             haptics.light();
+            // Vampiric
+            if (abs.has('vampiric')) heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + Math.round(dmg * 0.2));
             if (bossRef.current.hp <= 0) {
               bossRef.current.dead = true;
               bossRef.current.deadAt = performance.now();
@@ -1036,6 +1151,11 @@ export function LabyrinthRunScreen() {
               haptics.success();
               spawnBossLoot(bossRef.current.x, bossRef.current.y);
             }
+          } else if (nearest === null && !nearBossRef.current && nearOrb && !orbInteractedRef.current) {
+            // Collect ability orb
+            orbInteractedRef.current = true;
+            abilOrb.collected = true;
+            setAbilityChoice([...ALL_ABILITY_IDS].sort(() => Math.random() - 0.5).slice(0, 2) as [AbilityId, AbilityId]);
           } else if (nearest === null && !nearBossRef.current && nearPk !== null) {
             // Collect channel
             interactProg.current = Math.min(1, interactProg.current + dt / INTERACT_S);
@@ -1068,12 +1188,26 @@ export function LabyrinthRunScreen() {
           const msSinceAtk = performance.now() - m.lastAttackAt;
           if (dist < 1.0 && msSinceAtk >= 1000 / m.attackRate) {
             m.lastAttackAt = performance.now();
-            const dmgTaken = m.attack;
-            heroHpRef.current = Math.max(0, heroHpRef.current - dmgTaken);
-            spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmgTaken);
+            const abs = activeAbilitiesRef.current;
+            let finalDmg = m.attack;
+            if (abs.has('stone_skin')) finalDmg = Math.max(1, finalDmg - 5);
+            // Thorns
+            if (abs.has('thorns')) {
+              const thornDmg = Math.round(m.attack * 0.25);
+              m.hp = Math.max(0, m.hp - thornDmg);
+              if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); }
+            }
+            spawnParticlesFnRef.current(p.x, p.y, '239,68,68', finalDmg);
             shakeRef.current = Math.max(shakeRef.current, 8);
-            if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
-            else haptics.heavy();
+            if (abs.has('second_wind') && !secondWindUsedRef.current && heroHpRef.current - finalDmg <= 0) {
+              secondWindUsedRef.current = true;
+              heroHpRef.current = 1;
+              haptics.heavy();
+            } else {
+              heroHpRef.current = Math.max(0, heroHpRef.current - finalDmg);
+              if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+              else haptics.heavy();
+            }
           }
         }
 
@@ -1100,12 +1234,25 @@ export function LabyrinthRunScreen() {
           // Basic melee attack
           if (dist < 1.2 && bossNow - boss.lastBasicAt > (boss.phase === 2 ? 1100 : 1500)) {
             boss.lastBasicAt = bossNow;
-            const dmg = Math.round(boss.attack * (0.85 + Math.random() * 0.3));
-            heroHpRef.current = Math.max(0, heroHpRef.current - dmg);
-            spawnParticlesFnRef.current(boss.x, boss.y, '239,68,68', dmg);
+            const rawDmg = Math.round(boss.attack * (0.85 + Math.random() * 0.3));
+            const babs = activeAbilitiesRef.current;
+            let finalDmg = rawDmg;
+            if (babs.has('stone_skin')) finalDmg = Math.max(1, finalDmg - 5);
+            // Thorns
+            if (babs.has('thorns')) {
+              boss.hp = Math.max(0, boss.hp - Math.round(rawDmg * 0.25));
+            }
+            spawnParticlesFnRef.current(boss.x, boss.y, '239,68,68', finalDmg);
             shakeRef.current = Math.max(shakeRef.current, 7);
-            if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
-            else haptics.heavy();
+            if (babs.has('second_wind') && !secondWindUsedRef.current && heroHpRef.current - finalDmg <= 0) {
+              secondWindUsedRef.current = true;
+              heroHpRef.current = 1;
+              haptics.heavy();
+            } else {
+              heroHpRef.current = Math.max(0, heroHpRef.current - finalDmg);
+              if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+              else haptics.heavy();
+            }
           }
 
           // AOE ability
@@ -1132,25 +1279,42 @@ export function LabyrinthRunScreen() {
             const elapsed = performance.now() - aoe.startAt;
             if (elapsed < aoe.warmupMs) continue;
             aoe.fired = true;
+            const aoeAbs = activeAbilitiesRef.current;
             if (aoe.type === 'slam') {
               const d = Math.hypot(p.x - aoe.cx, p.y - aoe.cy);
               if (d < aoe.r) {
-                const dmg = Math.round(boss.attack * 1.5);
-                heroHpRef.current = Math.max(0, heroHpRef.current - dmg);
-                spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmg);
+                const rawAoeDmg = Math.round(boss.attack * 1.5);
+                let finalAoeDmg = rawAoeDmg;
+                if (aoeAbs.has('stone_skin')) finalAoeDmg = Math.max(1, finalAoeDmg - 5);
+                spawnParticlesFnRef.current(p.x, p.y, '239,68,68', finalAoeDmg);
                 shakeRef.current = Math.max(shakeRef.current, 12);
-                if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
-                else haptics.heavy();
+                if (aoeAbs.has('second_wind') && !secondWindUsedRef.current && heroHpRef.current - finalAoeDmg <= 0) {
+                  secondWindUsedRef.current = true;
+                  heroHpRef.current = 1;
+                  haptics.heavy();
+                } else {
+                  heroHpRef.current = Math.max(0, heroHpRef.current - finalAoeDmg);
+                  if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+                  else haptics.heavy();
+                }
               }
             } else {
               const d = Math.hypot(p.x - aoe.cx, p.y - aoe.cy);
               if (d > 1.2 && d < aoe.r) {
-                const dmg = Math.round(boss.attack * 1.35);
-                heroHpRef.current = Math.max(0, heroHpRef.current - dmg);
-                spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmg);
+                const rawAoeDmg = Math.round(boss.attack * 1.35);
+                let finalAoeDmg = rawAoeDmg;
+                if (aoeAbs.has('stone_skin')) finalAoeDmg = Math.max(1, finalAoeDmg - 5);
+                spawnParticlesFnRef.current(p.x, p.y, '239,68,68', finalAoeDmg);
                 shakeRef.current = Math.max(shakeRef.current, 10);
-                if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
-                else haptics.heavy();
+                if (aoeAbs.has('second_wind') && !secondWindUsedRef.current && heroHpRef.current - finalAoeDmg <= 0) {
+                  secondWindUsedRef.current = true;
+                  heroHpRef.current = 1;
+                  haptics.heavy();
+                } else {
+                  heroHpRef.current = Math.max(0, heroHpRef.current - finalAoeDmg);
+                  if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+                  else haptics.heavy();
+                }
               }
             }
           }
@@ -1175,6 +1339,16 @@ export function LabyrinthRunScreen() {
       skillCool.current  = Math.max(0, skillCool.current  - dt);
       skillFlash.current = Math.max(0, skillFlash.current - dt);
 
+      // Regeneration ability
+      if (activeAbilitiesRef.current.has('regeneration')) {
+        regenAccRef.current += 2 * dt;
+        if (regenAccRef.current >= 1) {
+          const regen = Math.floor(regenAccRef.current);
+          regenAccRef.current -= regen;
+          heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + regen);
+        }
+      }
+
       // ── Render ──
       // Decay and sample camera shake
       shakeRef.current = Math.max(0, shakeRef.current - dt * 24);
@@ -1193,6 +1367,7 @@ export function LabyrinthRunScreen() {
       drawEntrance(t);
       drawExits(t);
       drawPickups(t);
+      drawAbilityOrb(t);
       drawBoss(t);
       drawMonsters(t);
       drawPlayer(t);
@@ -1339,6 +1514,36 @@ export function LabyrinthRunScreen() {
           <div style={ui.skillTooltipCd}>Cooldown: {SKILL_CD}s</div>
         </div>
       )}
+      {activeAbilitiesState.length > 0 && (
+        <div style={ui.abilitiesBar}>
+          {activeAbilitiesState.map(id => (
+            <span key={id} title={ABILITY_DEFS[id].name}>{ABILITY_DEFS[id].icon}</span>
+          ))}
+        </div>
+      )}
+      {abilityChoice && (
+        <div style={ui.abilityOverlay}>
+          <div style={ui.abilityModal}>
+            <div style={ui.abilityTitle}>✨ Choose an Ability</div>
+            <div style={ui.abilitySubtitle}>Lasts until end of run</div>
+            {abilityChoice.map((id) => {
+              const def = ABILITY_DEFS[id];
+              const catColor = def.category === 'attack' ? '#f87171' : def.category === 'defense' ? '#60a5fa' : '#4ade80';
+              return (
+                <button key={id} style={{ ...ui.abilityCard, borderColor: catColor + '66' }}
+                  onClick={() => pickAbility(id)}>
+                  <span style={ui.abilityCardIcon}>{def.icon}</span>
+                  <div style={ui.abilityCardBody}>
+                    <div style={{ ...ui.abilityCardName, color: catColor }}>{def.name}</div>
+                    <div style={ui.abilityCardDesc}>{def.desc}</div>
+                    <div style={{ ...ui.abilityCardCat, color: catColor }}>{def.category.toUpperCase()}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1382,5 +1587,44 @@ const ui: Record<string, React.CSSProperties> = {
   },
   skillTooltipCd: {
     color: '#6a5a80', fontSize: 10,
+  },
+  abilityOverlay: {
+    position: 'absolute', inset: 0,
+    background: 'rgba(4,2,16,0.85)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 20,
+  },
+  abilityModal: {
+    width: '88%', maxWidth: 340,
+    background: '#0e0820',
+    border: '1px solid #5b21b6',
+    borderRadius: 18,
+    padding: '20px 16px',
+    display: 'flex', flexDirection: 'column', gap: 12,
+  },
+  abilityTitle: {
+    fontSize: 18, fontWeight: 900, color: '#c4b5fd',
+    textAlign: 'center', letterSpacing: '0.06em',
+  },
+  abilitySubtitle: {
+    fontSize: 12, color: '#7c6aaa', textAlign: 'center', marginTop: -8,
+  },
+  abilityCard: {
+    display: 'flex', alignItems: 'center', gap: 14,
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid',
+    borderRadius: 14, padding: '14px 16px',
+    cursor: 'pointer', textAlign: 'left',
+    width: '100%',
+  },
+  abilityCardIcon: { fontSize: 32, flexShrink: 0 },
+  abilityCardBody: { display: 'flex', flexDirection: 'column', gap: 3 },
+  abilityCardName: { fontSize: 15, fontWeight: 700 },
+  abilityCardDesc: { fontSize: 12, color: '#b0a0d0', lineHeight: 1.4 },
+  abilityCardCat: { fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', opacity: 0.7 },
+  abilitiesBar: {
+    position: 'absolute', bottom: 90, left: 12,
+    display: 'flex', gap: 6, fontSize: 22,
+    pointerEvents: 'none',
   },
 };
