@@ -192,7 +192,8 @@ export function LabyrinthRunScreen() {
     const img = new Image();
     heroLoadedRef.current = false;
     img.onload = () => { heroLoadedRef.current = true; };
-    img.src = `${import.meta.env.BASE_URL}heroes/${heroClass}.png`;
+    img.onerror = () => { img.src = `${import.meta.env.BASE_URL}heroes/${heroClass}.png`; };
+    img.src = `${import.meta.env.BASE_URL}heroes/${heroClass}@thumb.webp`;
     heroImgRef.current = img;
   }, [heroClass]);
 
