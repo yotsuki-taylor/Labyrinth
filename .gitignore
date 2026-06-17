@@ -9,3 +9,6 @@ prisma/migrations/
 
 # Generated room preview artifacts (run: node scripts/render-room.mjs)
 preview/
+
+# Claude Code internal files
+.claude/
