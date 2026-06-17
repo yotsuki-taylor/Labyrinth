@@ -26,6 +26,16 @@ function ri(min: number, max: number): number {
 /** Picks the type of a room reached by going one level deeper. */
 function rollRoomType(): RoomType {
   const r = Math.random();
+  if (r < 0.32) return 'loot';
+  if (r < 0.43) return 'treasure';
+  if (r < 0.57) return 'ability';
+  if (r < 0.65) return 'boss';
+  return 'empty';
+}
+
+/** Same as rollRoomType but never returns boss (used for boss-room exits). */
+function rollRoomTypeNoBoss(): RoomType {
+  const r = Math.random();
   if (r < 0.35) return 'loot';
   if (r < 0.47) return 'treasure';
   if (r < 0.62) return 'ability';
@@ -36,12 +46,15 @@ function rollRoomType(): RoomType {
 function pickupPlan(type: RoomType, depth: number): { count: number; rare: boolean } {
   const depthBonus = Math.floor(depth / 2);
   switch (type) {
-    case 'start':    return { count: ri(1, 2), rare: false };
+    case 'start':    return { count: ri(1, 2),           rare: false };
     case 'empty':    return { count: ri(1, 3) + depthBonus, rare: false };
     case 'loot':     return { count: ri(4, 6) + depthBonus, rare: false };
     case 'treasure': return { count: ri(3, 5) + depthBonus, rare: true };
     case 'boss':     return { count: 0, rare: false };
     case 'ability':  return { count: ri(0, 2), rare: false };
+    case 'treasure': return { count: ri(3, 5) + depthBonus, rare: true  };
+    case 'ability':  return { count: ri(0, 2),           rare: false };
+    case 'boss':     return { count: 0,                  rare: false };
   }
 }
 
@@ -98,6 +111,7 @@ function generateWalls(
 
   const wallCount: Record<RoomType, [number, number]> = {
     start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9], boss: [3, 5], ability: [1, 3],
+    start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9], ability: [1, 3], boss: [3, 5],
   };
   const [mn, mx] = wallCount[type];
   const count = ri(mn, mx);
@@ -119,19 +133,19 @@ function generateWalls(
 
 /**
  * Generates one room.
- * @param depth     0-based room depth in the run.
- * @param maxDepth  total rooms in the run (final room is depth === maxDepth - 1).
- * @param type      the room's type.
+ *
+ * Exit logic:
+ * - boss room  → exactly one extract exit + one deeper exit (shuffled sides).
+ * - other rooms → small random chance (8%) that one exit is extract; both
+ *                 exits always exist so the player can always continue.
+ * - start room  → never has an extract exit (too early).
+ *
+ * isFinal = true whenever the room has at least one extract exit.
  */
-export function generateRoom(depth: number, maxDepth: number, type: RoomType): ExpeditionRoomDTO {
-  const isFinal = depth >= maxDepth - 1;
-  // Boss room is always the final room.
-  if (isFinal) type = 'boss';
+export function generateRoom(depth: number, _maxDepth: number, type: RoomType): ExpeditionRoomDTO {
   const width  = type === 'boss' ? ri(13, 15) : ri(8, 11);
   const height = type === 'boss' ? ri(14, 16) : ri(9, 12);
 
-  // Scatter pickups across the interior (leave a 1-tile margin from walls,
-  // and keep the bottom entrance row / top exit row clear).
   const { count, rare } = pickupPlan(type, depth);
   const pickups: RoomPickupDTO[] = [];
   const used = new Set<string>();
@@ -147,12 +161,27 @@ export function generateRoom(depth: number, maxDepth: number, type: RoomType): E
     pickups.push({ id: newId('pk'), resource, amount, x, y, collected: false });
   }
 
-  // Two exits at the top — left and right doorways.
-  const exits: RoomExitDTO[] = [
-    { id: newId('ex'), side: 'left',  leadsTo: isFinal ? type : rollRoomType(), isExtract: isFinal },
-    { id: newId('ex'), side: 'right', leadsTo: isFinal ? type : rollRoomType(), isExtract: isFinal },
-  ];
+  let exits: RoomExitDTO[];
 
+  if (type === 'boss') {
+    // One guaranteed extract, one deeper — randomise which side.
+    const extractLeft = Math.random() < 0.5;
+    exits = [
+      { id: newId('ex'), side: 'left',  leadsTo: rollRoomTypeNoBoss(), isExtract:  extractLeft },
+      { id: newId('ex'), side: 'right', leadsTo: rollRoomTypeNoBoss(), isExtract: !extractLeft },
+    ];
+  } else {
+    // 8% chance one exit is an extraction point (never on depth 0 / start room).
+    const EXTRACT_CHANCE = type === 'start' ? 0 : 0.08;
+    const hasExtract  = Math.random() < EXTRACT_CHANCE;
+    const extractLeft = Math.random() < 0.5;
+    exits = [
+      { id: newId('ex'), side: 'left',  leadsTo: rollRoomType(), isExtract: hasExtract &&  extractLeft },
+      { id: newId('ex'), side: 'right', leadsTo: rollRoomType(), isExtract: hasExtract && !extractLeft },
+    ];
+  }
+
+  const isFinal = exits.some(e => e.isExtract);
   const walls = generateWalls(width, height, pickups, type);
 
   return { id: newId('room'), depth, type, width, height, pickups, exits, isFinal, walls };

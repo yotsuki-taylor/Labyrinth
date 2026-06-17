@@ -2,6 +2,7 @@ import type { ResourceType, ResourceMap } from './resources.js';
 
 /** Each expedition is a sequence of rooms; the player walks through one at a time. */
 export type RoomType = 'start' | 'empty' | 'loot' | 'treasure' | 'boss' | 'ability';
+export type RoomType = 'start' | 'empty' | 'loot' | 'treasure' | 'ability' | 'boss';
 export type ExpeditionStatus = 'active' | 'completed' | 'failed';
 
 /** A collectible resource pile placed somewhere on the room floor. */

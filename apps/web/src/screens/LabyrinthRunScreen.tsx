@@ -1500,8 +1500,8 @@ export function LabyrinthRunScreen() {
       {expedition.room.isFinal && (
         <div style={ui.finalHint}>
           {expedition.room.type === 'boss'
-            ? (bossDefeated ? '🚪 Collect the loot and exit!' : '👹 Defeat the Labyrinth Keeper to extract!')
-            : '🚪 Exit to extract!'}
+            ? (bossDefeated ? '🚪 Collect loot — extract or risk going deeper!' : '👹 Defeat the Labyrinth Keeper!')
+            : '⚠️ One door leads to extraction — choose wisely!'}
         </div>
       )}
       {error && <div style={ui.error}>{error}</div>}
