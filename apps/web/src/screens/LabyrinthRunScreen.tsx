@@ -164,7 +164,7 @@ const INTERACT_S  = 0.9;    // seconds to hold-collect
 const SKILL_CD    = 8;
 
 const RES_ICON: Record<string, string> = {
-  gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🔮',
+  gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🏺',
 };
 
 function roomPreviewIcon(type: RoomType, isExtract: boolean): string {
