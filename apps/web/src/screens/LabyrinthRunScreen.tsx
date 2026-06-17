@@ -408,6 +408,17 @@ export function LabyrinthRunScreen() {
 
     const wallSet = new Set<string>(expedition.room.walls ?? []);
 
+    // Per-room-type colour palette ─────────────────────────────────────────
+    type Palette = { t0: string; t1: string; t2: string; stroke: string; bg: string; pit: string; vignette: string };
+    const PALETTES: Record<string, Palette> = {
+      start:    { t0: '#3c3c5a', t1: '#2a2a42', t2: '#191929', stroke: '#20203a', bg: '#07070f', pit: '#020208', vignette: 'rgba(20,15,50,0.55)'  },
+      empty:    { t0: '#252540', t1: '#181830', t2: '#0e0e22', stroke: '#141430', bg: '#05050e', pit: '#020208', vignette: 'rgba(15,10,45,0.55)'  },
+      loot:     { t0: '#183824', t1: '#102818', t2: '#08180e', stroke: '#0e2414', bg: '#02080a', pit: '#00060a', vignette: 'rgba(8,35,15,0.60)'   },
+      treasure: { t0: '#38300a', t1: '#282205', t2: '#181402', stroke: '#261e04', bg: '#080600', pit: '#060400', vignette: 'rgba(55,40,0,0.60)'   },
+      boss:     { t0: '#381010', t1: '#260808', t2: '#160404', stroke: '#240606', bg: '#080202', pit: '#060000', vignette: 'rgba(70,8,8,0.65)'    },
+    };
+    const PAL: Palette = PALETTES[expedition.room.type] ?? PALETTES.start;
+
     function playerBlocked(x: number, y: number): boolean {
       const r = PLAYER_R;
       return (
@@ -488,7 +499,7 @@ export function LabyrinthRunScreen() {
 
     function drawPit(sx: number, sy: number) {
       const pg = ctx.createRadialGradient(sx, sy + TH / 2, 2, sx, sy + TH / 2, TW / 2);
-      pg.addColorStop(0, '#000000'); pg.addColorStop(1, '#0a0a10');
+      pg.addColorStop(0, '#000000'); pg.addColorStop(1, PAL.pit);
       drawDiamond(sx, sy, TW * 0.98, TH * 0.98, pg, '#000000');
     }
 
@@ -504,8 +515,8 @@ export function LabyrinthRunScreen() {
             drawPit(sx, sy);
           } else {
             const g = ctx.createLinearGradient(sx, sy, sx, sy + TH);
-            g.addColorStop(0, '#3c3c5a'); g.addColorStop(0.6, '#2a2a42'); g.addColorStop(1, '#191929');
-            drawDiamond(sx, sy, TW * 0.98, TH * 0.98, g, '#20203a');
+            g.addColorStop(0, PAL.t0); g.addColorStop(0.6, PAL.t1); g.addColorStop(1, PAL.t2);
+            drawDiamond(sx, sy, TW * 0.98, TH * 0.98, g, PAL.stroke);
           }
         }
       }
@@ -1172,7 +1183,7 @@ export function LabyrinthRunScreen() {
       const shakeY = sk > 0.3 ? (Math.random() - 0.5) * sk : 0;
 
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = '#07070f'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = PAL.bg; ctx.fillRect(0, 0, W, H);
 
       // World (shakes)
       ctx.save();
@@ -1187,6 +1198,12 @@ export function LabyrinthRunScreen() {
       drawPlayer(t);
       drawParticles(dt);
       ctx.restore();
+
+      // Room-tinted vignette (drawn over world, under UI)
+      const vg = ctx.createRadialGradient(W / 2, H * 0.45, H * 0.08, W / 2, H * 0.45, H * 0.85);
+      vg.addColorStop(0, 'rgba(0,0,0,0)');
+      vg.addColorStop(1, PAL.vignette);
+      ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
 
       // UI (stable)
       drawHeroHpBar();
@@ -1291,7 +1308,7 @@ export function LabyrinthRunScreen() {
   const loot = Object.entries(expedition.pendingLoot).filter(([, v]) => (v ?? 0) > 0);
 
   return (
-    <div style={{ position: 'relative', width: W, margin: '0 auto', overflow: 'hidden', background: '#07070f' }}>
+    <div style={{ position: 'relative', width: W, margin: '0 auto', overflow: 'hidden', background: '#050508' }}>
       <canvas
         ref={canvasRef} width={W} height={H}
         style={{ display: 'block', touchAction: 'none' }}
