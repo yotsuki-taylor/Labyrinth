@@ -42,13 +42,39 @@ interface Particle {
   text?: string;          // floating damage number
 }
 
+// ── Boss types ─────────────────────────────────────────────────────────────
+interface BossAOE {
+  id: string;
+  type: 'slam' | 'ring';
+  startAt: number;    // performance.now() when telegraphed
+  warmupMs: number;   // ms of telegraph
+  fired: boolean;     // damage applied
+  cx: number; cy: number; // world-space target (slam: player pos, ring: boss pos)
+  r: number;          // tile-space radius at detonation
+}
+
+interface Boss {
+  hp: number; maxHp: number;
+  x: number; y: number;
+  attack: number;
+  speed: number;
+  aggroRange: number;
+  aggro: boolean;
+  lastBasicAt: number;
+  dead: boolean; deadAt: number;
+  hitFlash: number;
+  phase: 1 | 2;
+  nextAoeAt: number;
+  aoes: BossAOE[];
+}
+
 // Spawn counts per room type: [min, max]
 const MONSTER_COUNTS: Record<string, [number, number]> = {
-  start: [0, 0], empty: [0, 1], loot: [1, 3], treasure: [2, 4],
+  start: [0, 0], empty: [0, 1], loot: [1, 3], treasure: [2, 4], boss: [0, 0],
 };
 const MONSTER_POOL: Record<string, MonsterType[]> = {
   start: [], empty: ['skeleton'], loot: ['skeleton', 'wolf'],
-  treasure: ['skeleton', 'wolf', 'golem'],
+  treasure: ['skeleton', 'wolf', 'golem'], boss: [],
 };
 
 const ri = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a;
@@ -128,6 +154,7 @@ const RES_ICON: Record<string, string> = {
 
 function roomPreviewIcon(type: RoomType, isExtract: boolean): string {
   if (isExtract) return '🚪';
+  if (type === 'boss') return '👹';
   if (type === 'loot') return '💰';
   if (type === 'treasure') return '💎';
   return '·';
@@ -158,6 +185,9 @@ export function LabyrinthRunScreen() {
   const monstersRef    = useRef<Monster[]>([]);
   const nearEnemyRef   = useRef<Monster | null>(null);
   const attackCoolRef  = useRef(0);
+  // Boss
+  const bossRef        = useRef<Boss | null>(null);
+  const nearBossRef    = useRef(false);
   // Interact (collect)
   const nearPickupRef  = useRef<string | null>(null);
   const interactHeld   = useRef(false);
@@ -210,10 +240,32 @@ export function LabyrinthRunScreen() {
     interactProg.current = 0;
     nearPickupRef.current = null;
     nearEnemyRef.current  = null;
+    nearBossRef.current   = false;
     attackCoolRef.current = 0;
     monstersRef.current    = spawnMonsters(expedition.room);
     particlesRef.current   = [];
     shakeRef.current       = 0;
+
+    // Init boss if this is a boss room
+    if (expedition.room.type === 'boss') {
+      const sc = 1 + expedition.depth * 0.12;
+      bossRef.current = {
+        hp: Math.round(450 * sc), maxHp: Math.round(450 * sc),
+        x: expedition.room.width / 2, y: 3,
+        attack: Math.round(22 * sc),
+        speed: 0.55,
+        aggroRange: 12,
+        aggro: false,
+        lastBasicAt: 0,
+        dead: false, deadAt: 0,
+        hitFlash: 0,
+        phase: 1,
+        nextAoeAt: performance.now() + 4000,
+        aoes: [],
+      };
+    } else {
+      bossRef.current = null;
+    }
 
     // Init hero HP from store on expedition start; preserve across rooms.
     const hero = heroes.find(h => h.id === expedition.heroId);
@@ -242,6 +294,7 @@ export function LabyrinthRunScreen() {
     const p      = playerRef.current;
 
     if (dmg > 0) {
+      // Hit regular monsters
       for (const m of monstersRef.current) {
         if (m.dead) continue;
         const dist = Math.hypot(p.x - m.x, p.y - m.y);
@@ -255,11 +308,43 @@ export function LabyrinthRunScreen() {
           if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); }
         }
       }
+      // Hit boss if in range
+      const boss = bossRef.current;
+      if (boss && !boss.dead) {
+        const dist = Math.hypot(p.x - boss.x, p.y - boss.y);
+        const inRange = radius === 0 ? dist < ATTACK_R : dist < radius;
+        if (inRange) {
+          boss.hp = Math.max(0, boss.hp - dmg);
+          boss.hitFlash = 1;
+          spawnParticlesFnRef.current(boss.x, boss.y, '210,160,255', dmg);
+          shakeRef.current = Math.max(shakeRef.current, 5);
+          haptics.medium();
+          if (boss.hp <= 0) {
+            boss.dead = true;
+            boss.deadAt = performance.now();
+            nearBossRef.current = false;
+            shakeRef.current = 20;
+            haptics.success();
+            setTimeout(() => {
+              const exp2 = expRef.current;
+              if (!exp2) return;
+              const extractExit = exp2.room.exits[0];
+              if (extractExit) {
+                if (busyRef.current) return;
+                busyRef.current = true;
+                haptics.light();
+                engine.syncHeroHp(heroHpRef.current);
+                void enterExit(extractExit.id);
+              }
+            }, 2500);
+          }
+        }
+      }
     }
     if (heal > 0) {
       heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + heal);
     }
-  }, []);
+  }, [enterExit]);
 
   useEffect(() => {
     const dn = (e: KeyboardEvent) => {
@@ -416,6 +501,123 @@ export function LabyrinthRunScreen() {
           }
         }
       }
+    }
+
+    function drawBossAOEs() {
+      const boss = bossRef.current;
+      if (!boss || boss.dead) return;
+      const now = performance.now();
+      for (const aoe of boss.aoes) {
+        const elapsed = now - aoe.startAt;
+        const prog = Math.min(1, elapsed / aoe.warmupMs);
+        const alpha = aoe.fired ? 0 : 0.25 + 0.2 * Math.sin(prog * Math.PI * 6);
+        if (aoe.type === 'slam') {
+          const { sx: asx, sy: asy } = toScreen(aoe.cx, aoe.cy);
+          const rPx = aoe.r * (TW / 2);
+          ctx.save();
+          ctx.beginPath();
+          ctx.ellipse(asx, asy + TH / 2, rPx, rPx * (TH / TW), 0, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(239,68,68,${alpha * 0.4})`;
+          ctx.fill();
+          ctx.strokeStyle = `rgba(255,80,80,${alpha + 0.3})`;
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+          ctx.restore();
+        } else {
+          // ring: radius expands from 0 to aoe.r over warmup
+          const curR = aoe.r * prog;
+          const { sx: bsx, sy: bsy } = toScreen(aoe.cx, aoe.cy);
+          const rPx = curR * (TW / 2);
+          const thickness = 18;
+          ctx.save();
+          ctx.beginPath();
+          ctx.ellipse(bsx, bsy + TH / 2, rPx + thickness, (rPx + thickness) * (TH / TW), 0, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255,100,0,${alpha * 0.18})`;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(bsx, bsy + TH / 2, rPx + thickness, (rPx + thickness) * (TH / TW), 0, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255,120,0,${alpha + 0.25})`;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          if (rPx > thickness) {
+            ctx.beginPath();
+            ctx.ellipse(bsx, bsy + TH / 2, rPx - thickness, (rPx - thickness) * (TH / TW), 0, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(255,120,0,${(alpha + 0.25) * 0.5})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+    }
+
+    function drawBoss(t: number) {
+      const boss = bossRef.current;
+      if (!boss) return;
+      if (boss.dead) {
+        const elapsed = performance.now() - boss.deadAt;
+        if (elapsed > 2500) return;
+        ctx.globalAlpha = Math.max(0, 1 - elapsed / 1500);
+      }
+      const { sx, sy } = toScreen(boss.x, boss.y);
+      const footY = sy + TH / 2;
+      const r = TW * 0.46;
+
+      // Floor shadow
+      ctx.beginPath();
+      ctx.ellipse(sx, footY, r * 0.8, r * 0.28, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fill();
+
+      // Aura
+      const glowR = r + 8 + 4 * Math.sin(t * 3);
+      const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR + 12);
+      const flashA = boss.hitFlash * 0.5;
+      grd.addColorStop(0, `rgba(239,68,68,${0.45 + flashA})`);
+      grd.addColorStop(1, 'rgba(239,68,68,0)');
+      ctx.beginPath(); ctx.arc(sx, sy, glowR + 12, 0, Math.PI * 2);
+      ctx.fillStyle = grd; ctx.fill();
+
+      // Icon
+      if (boss.hitFlash > 0) { ctx.shadowColor = '#ef4444'; ctx.shadowBlur = 24; }
+      ctx.font = `${Math.round(r * 1.9)}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('👹', sx, sy - r * 0.15);
+      ctx.shadowBlur = 0;
+
+      // Phase 2 label
+      if (boss.phase === 2) {
+        ctx.font = '700 11px sans-serif';
+        ctx.fillStyle = '#f97316';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('⚡ ENRAGED', sx, sy - r * 1.8);
+      }
+
+      // HP bar above boss
+      const bw = r * 3.5, bh = 7, bx = sx - bw / 2, bbarY = sy - r * 1.3;
+      ctx.fillStyle = '#1a0a0a'; ctx.fillRect(bx, bbarY, bw, bh);
+      const ratio = boss.hp / boss.maxHp;
+      ctx.fillStyle = ratio > 0.5 ? '#ef4444' : ratio > 0.25 ? '#f97316' : '#dc2626';
+      ctx.fillRect(bx, bbarY, bw * ratio, bh);
+
+      ctx.globalAlpha = 1;
+    }
+
+    function drawBossHpBar() {
+      const boss = bossRef.current;
+      if (!boss || boss.dead) return;
+      const ratio = boss.hp / boss.maxHp;
+      const bw = Math.min(W - 48, 300), bh = 10, cx = W / 2, by = 34;
+      ctx.fillStyle = 'rgba(10,8,20,0.88)';
+      ctx.beginPath();
+      ctx.roundRect(cx - bw / 2 - 14, by - bh / 2 - 12, bw + 28, bh + 28, 8);
+      ctx.fill();
+      ctx.font = '700 11px sans-serif';
+      ctx.fillStyle = '#f87171'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('👹  LABYRINTH KEEPER', cx, by - 6);
+      ctx.fillStyle = '#1a0a0a'; ctx.fillRect(cx - bw / 2, by + 2, bw, bh);
+      const barColor = ratio > 0.5 ? '#ef4444' : ratio > 0.25 ? '#f97316' : '#dc2626';
+      ctx.fillStyle = barColor;
+      ctx.fillRect(cx - bw / 2, by + 2, bw * ratio, bh);
     }
 
     function drawEntrance(t: number) {
@@ -676,11 +878,12 @@ export function LabyrinthRunScreen() {
 
     function drawButtons() {
       const enemy   = nearEnemyRef.current;
+      const nearBoss = nearBossRef.current;
       const pickup  = nearPickupRef.current;
       const atkCool = attackCoolRef.current;
 
       // Interact / Attack button
-      if (enemy !== null) {
+      if (enemy !== null || nearBoss) {
         // Attack mode — red
         const atkProg = atkCool > 0 ? atkCool / ATTACK_CD : 0; // depletes as recharges
         drawCircleBtn(IBTN.x, IBTN.y, IBTN.r, true, '⚔️', 'ATK', atkProg, '239,68,68');
@@ -761,6 +964,14 @@ export function LabyrinthRunScreen() {
         }
         nearEnemyRef.current = nearest;
 
+        // Boss counts as near-enemy if alive and close
+        const bossCheck = bossRef.current;
+        nearBossRef.current = !!(
+          bossCheck && !bossCheck.dead &&
+          nearest === null &&
+          Math.hypot(p.x - bossCheck.x, p.y - bossCheck.y) < ATTACK_R
+        );
+
         // ── Near-pickup detection ──
         let nearPk: string | null = null;
         let nearPkDist = PICKUP_R;
@@ -769,17 +980,18 @@ export function LabyrinthRunScreen() {
           const d = Math.hypot(p.x - pk.x, p.y - pk.y);
           if (d < nearPkDist) { nearPkDist = d; nearPk = pk.id; }
         }
-        nearPickupRef.current = nearest !== null ? null : nearPk; // enemy has priority
+        nearPickupRef.current = (nearest !== null || nearBossRef.current) ? null : nearPk; // enemy has priority
 
         // ── Interact button action ──
         attackCoolRef.current = Math.max(0, attackCoolRef.current - dt);
         if (interactHeld.current) {
           if (nearest !== null && attackCoolRef.current <= 0) {
-            // Attack
+            // Attack monster
             attackCoolRef.current = ATTACK_CD;
-            nearest.hp -= heroStatsRef.current.attack;
+            const dmg = Math.max(1, Math.round(heroStatsRef.current.attack * (0.9 + Math.random() * 0.2)));
+            nearest.hp -= dmg;
             nearest.hitFlash = 1;
-            spawnParticlesFnRef.current(nearest.x, nearest.y, '255,120,50', heroStatsRef.current.attack);
+            spawnParticlesFnRef.current(nearest.x, nearest.y, '255,120,50', dmg);
             shakeRef.current = Math.max(shakeRef.current, 3);
             haptics.light();
             if (nearest.hp <= 0) {
@@ -787,7 +999,30 @@ export function LabyrinthRunScreen() {
               nearest.deadAt = performance.now();
               nearEnemyRef.current = null;
             }
-          } else if (nearest === null && nearPk !== null) {
+          } else if (nearBossRef.current && bossRef.current && !bossRef.current.dead && attackCoolRef.current <= 0) {
+            // Attack boss
+            attackCoolRef.current = ATTACK_CD;
+            const stats = heroStatsRef.current;
+            const dmg = Math.max(1, Math.round(stats.attack * (0.9 + Math.random() * 0.2)));
+            bossRef.current.hp = Math.max(0, bossRef.current.hp - dmg);
+            bossRef.current.hitFlash = 1;
+            spawnParticlesFnRef.current(bossRef.current.x, bossRef.current.y, '255,120,50', dmg);
+            shakeRef.current = Math.max(shakeRef.current, 3);
+            haptics.light();
+            if (bossRef.current.hp <= 0) {
+              bossRef.current.dead = true;
+              bossRef.current.deadAt = performance.now();
+              nearBossRef.current = false;
+              shakeRef.current = 20;
+              haptics.success();
+              setTimeout(() => {
+                const exp2 = expRef.current;
+                if (!exp2) return;
+                const extractExit = exp2.room.exits[0];
+                if (extractExit) doExit(extractExit.id);
+              }, 2500);
+            }
+          } else if (nearest === null && !nearBossRef.current && nearPk !== null) {
             // Collect channel
             interactProg.current = Math.min(1, interactProg.current + dt / INTERACT_S);
             if (interactProg.current >= 1) {
@@ -828,10 +1063,97 @@ export function LabyrinthRunScreen() {
           }
         }
 
-        // ── Exit triggers ──
-        for (const ex of exp.room.exits) {
-          const ep = exitPos(ex.side);
-          if (Math.hypot(p.x - ep.x, p.y - ep.y) < EXIT_R) { doExit(ex.id); break; }
+        // ── Boss AI ──
+        const boss = bossRef.current;
+        if (boss && !boss.dead && (boss.aggro || Math.hypot(p.x - boss.x, p.y - boss.y) < boss.aggroRange)) {
+          if (!boss.aggro) boss.aggro = true;
+          boss.hitFlash = Math.max(0, boss.hitFlash - dt * 6);
+          const bossNow = performance.now();
+          const dist = Math.hypot(p.x - boss.x, p.y - boss.y);
+
+          // Phase check
+          if (boss.hp < boss.maxHp * 0.5 && boss.phase === 1) boss.phase = 2;
+
+          // Move toward player (stop if casting)
+          const isCasting = boss.aoes.some(a => !a.fired);
+          if (!isCasting && dist > 1.1) {
+            const nx = boss.x + (p.x - boss.x) / dist * boss.speed * dt;
+            const ny = boss.y + (p.y - boss.y) / dist * boss.speed * dt;
+            if (!playerBlocked(nx, boss.y)) boss.x = nx;
+            if (!playerBlocked(boss.x, ny)) boss.y = ny;
+          }
+
+          // Basic melee attack
+          if (dist < 1.2 && bossNow - boss.lastBasicAt > (boss.phase === 2 ? 1100 : 1500)) {
+            boss.lastBasicAt = bossNow;
+            const dmg = Math.round(boss.attack * (0.85 + Math.random() * 0.3));
+            heroHpRef.current = Math.max(0, heroHpRef.current - dmg);
+            spawnParticlesFnRef.current(boss.x, boss.y, '239,68,68', dmg);
+            shakeRef.current = Math.max(shakeRef.current, 7);
+            if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+            else haptics.heavy();
+          }
+
+          // AOE ability
+          if (!isCasting && bossNow >= boss.nextAoeAt) {
+            const aoeType: 'slam' | 'ring' = Math.random() < 0.55 ? 'slam' : 'ring';
+            const warmupMs = aoeType === 'slam' ? 1700 : 1400;
+            if (aoeType === 'slam') {
+              const count = boss.phase === 2 ? 2 : 1;
+              for (let i = 0; i < count; i++) {
+                const cx2 = i === 0 ? p.x : p.x + (Math.random() - 0.5) * 3;
+                const cy2 = i === 0 ? p.y : p.y + (Math.random() - 0.5) * 3;
+                boss.aoes.push({ id: `aoe_${bossNow}_${i}`, type: 'slam', startAt: bossNow, warmupMs, fired: false, cx: cx2, cy: cy2, r: 2.2 });
+              }
+            } else {
+              boss.aoes.push({ id: `aoe_${bossNow}`, type: 'ring', startAt: bossNow, warmupMs, fired: false, cx: boss.x, cy: boss.y, r: 4.5 });
+            }
+            const cd = boss.phase === 2 ? 2800 : 4500;
+            boss.nextAoeAt = bossNow + warmupMs + cd;
+          }
+
+          // Process AOE damage
+          for (const aoe of boss.aoes) {
+            if (aoe.fired) continue;
+            const elapsed = performance.now() - aoe.startAt;
+            if (elapsed < aoe.warmupMs) continue;
+            aoe.fired = true;
+            if (aoe.type === 'slam') {
+              const d = Math.hypot(p.x - aoe.cx, p.y - aoe.cy);
+              if (d < aoe.r) {
+                const dmg = Math.round(boss.attack * 1.5);
+                heroHpRef.current = Math.max(0, heroHpRef.current - dmg);
+                spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmg);
+                shakeRef.current = Math.max(shakeRef.current, 12);
+                if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+                else haptics.heavy();
+              }
+            } else {
+              const d = Math.hypot(p.x - aoe.cx, p.y - aoe.cy);
+              if (d > 1.2 && d < aoe.r) {
+                const dmg = Math.round(boss.attack * 1.35);
+                heroHpRef.current = Math.max(0, heroHpRef.current - dmg);
+                spawnParticlesFnRef.current(p.x, p.y, '239,68,68', dmg);
+                shakeRef.current = Math.max(shakeRef.current, 10);
+                if (heroHpRef.current <= 0) { haptics.error(); doHeroDefeated(); }
+                else haptics.heavy();
+              }
+            }
+          }
+          // Expire old AOEs
+          boss.aoes = boss.aoes.filter(a => {
+            const age = performance.now() - a.startAt;
+            return age < a.warmupMs + 800;
+          });
+        }
+
+        // ── Exit triggers — blocked in boss room while boss is alive ──
+        const bossAlive = bossRef.current && !bossRef.current.dead;
+        if (!bossAlive || exp.room.type !== 'boss') {
+          for (const ex of exp.room.exits) {
+            const ep = exitPos(ex.side);
+            if (Math.hypot(p.x - ep.x, p.y - ep.y) < EXIT_R) { doExit(ex.id); break; }
+          }
         }
       }
 
@@ -853,9 +1175,11 @@ export function LabyrinthRunScreen() {
       ctx.save();
       ctx.translate(shakeX, shakeY);
       drawFloor();
+      drawBossAOEs();
       drawEntrance(t);
       drawExits(t);
       drawPickups(t);
+      drawBoss(t);
       drawMonsters(t);
       drawPlayer(t);
       drawParticles(dt);
@@ -863,6 +1187,7 @@ export function LabyrinthRunScreen() {
 
       // UI (stable)
       drawHeroHpBar();
+      drawBossHpBar();
       drawJoystick();
       drawButtons();
 
@@ -978,7 +1303,7 @@ export function LabyrinthRunScreen() {
         )}
       </div>
       {expedition.room.isFinal && (
-        <div style={ui.finalHint}>🚪 Both doors lead to extraction — secure your loot!</div>
+        <div style={ui.finalHint}>👹 Defeat the Labyrinth Keeper to extract!</div>
       )}
       {error && <div style={ui.error}>{error}</div>}
       {skillTooltip && heroClass && (
@@ -1010,8 +1335,8 @@ const ui: Record<string, React.CSSProperties> = {
   },
   finalHint: {
     position: 'absolute', top: 40, left: '50%', transform: 'translateX(-50%)',
-    background: 'rgba(20,83,45,0.9)', border: '1px solid #4ade80', borderRadius: 8,
-    padding: '5px 12px', color: '#4ade80', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none',
+    background: 'rgba(83,20,20,0.9)', border: '1px solid #ef4444', borderRadius: 8,
+    padding: '5px 12px', color: '#f87171', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none',
   },
   error: {
     position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)',

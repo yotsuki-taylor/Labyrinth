@@ -39,6 +39,7 @@ function pickupPlan(type: RoomType, depth: number): { count: number; rare: boole
     case 'empty':    return { count: ri(1, 3) + depthBonus, rare: false };
     case 'loot':     return { count: ri(4, 6) + depthBonus, rare: false };
     case 'treasure': return { count: ri(3, 5) + depthBonus, rare: true };
+    case 'boss':     return { count: 0, rare: false };
   }
 }
 
@@ -94,7 +95,7 @@ function generateWalls(
   }
 
   const wallCount: Record<RoomType, [number, number]> = {
-    start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9],
+    start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9], boss: [3, 5],
   };
   const [mn, mx] = wallCount[type];
   const count = ri(mn, mx);
@@ -121,9 +122,11 @@ function generateWalls(
  * @param type      the room's type.
  */
 export function generateRoom(depth: number, maxDepth: number, type: RoomType): ExpeditionRoomDTO {
-  const width = ri(8, 11);
-  const height = ri(9, 12);
   const isFinal = depth >= maxDepth - 1;
+  // Boss room is always the final room.
+  if (isFinal) type = 'boss';
+  const width  = type === 'boss' ? ri(13, 15) : ri(8, 11);
+  const height = type === 'boss' ? ri(14, 16) : ri(9, 12);
 
   // Scatter pickups across the interior (leave a 1-tile margin from walls,
   // and keep the bottom entrance row / top exit row clear).
