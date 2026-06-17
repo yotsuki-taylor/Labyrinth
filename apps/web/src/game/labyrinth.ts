@@ -50,11 +50,8 @@ function pickupPlan(type: RoomType, depth: number): { count: number; rare: boole
     case 'empty':    return { count: ri(1, 3) + depthBonus, rare: false };
     case 'loot':     return { count: ri(4, 6) + depthBonus, rare: false };
     case 'treasure': return { count: ri(3, 5) + depthBonus, rare: true };
-    case 'boss':     return { count: 0, rare: false };
     case 'ability':  return { count: ri(0, 2), rare: false };
-    case 'treasure': return { count: ri(3, 5) + depthBonus, rare: true  };
-    case 'ability':  return { count: ri(0, 2),           rare: false };
-    case 'boss':     return { count: 0,                  rare: false };
+    case 'boss':     return { count: 0, rare: false };
   }
 }
 
@@ -110,7 +107,6 @@ function generateWalls(
   }
 
   const wallCount: Record<RoomType, [number, number]> = {
-    start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9], boss: [3, 5], ability: [1, 3],
     start: [0, 2], empty: [2, 4], loot: [3, 6], treasure: [5, 9], ability: [1, 3], boss: [3, 5],
   };
   const [mn, mx] = wallCount[type];
