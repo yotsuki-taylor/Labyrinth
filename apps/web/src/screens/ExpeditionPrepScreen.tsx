@@ -83,16 +83,19 @@ function HeroCard({ hero, selected, onSelect }: { hero: HeroDTO; selected: boole
       onClick={onSelect}
     >
       <div style={s.portraitWrap}>
-        <img
-          src={`${import.meta.env.BASE_URL}heroes/${hero.class}.png`}
-          alt={hero.class}
-          style={s.portrait}
-          onError={(e) => {
-            const el = e.target as HTMLImageElement;
-            el.style.display = 'none';
-            (el.parentElement as HTMLElement).style.background = '#2a1a4a';
-          }}
-        />
+        <picture>
+          <source srcSet={`${import.meta.env.BASE_URL}heroes/${hero.class}@thumb.webp`} type="image/webp" />
+          <img
+            src={`${import.meta.env.BASE_URL}heroes/${hero.class}.png`}
+            alt={hero.class}
+            style={s.portrait}
+            onError={(e) => {
+              const el = e.target as HTMLImageElement;
+              el.style.display = 'none';
+              (el.parentElement as HTMLElement).style.background = '#2a1a4a';
+            }}
+          />
+        </picture>
         <div style={s.levelBadge}>Lv {hero.level}</div>
         {selected && <div style={s.selectedBadge}>✓</div>}
       </div>
@@ -183,7 +186,7 @@ const s: Record<string, React.CSSProperties> = {
   portraitWrap: {
     position: 'relative',
     width: '100%',
-    height: 160,
+    height: 200,
     background: '#12102a',
     overflow: 'hidden',
   },
