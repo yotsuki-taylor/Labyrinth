@@ -2,8 +2,15 @@ import { useGameStore } from '../store/gameStore.js';
 import { HERO_TEMPLATES } from '@labyrinth/shared';
 import type { HeroClass } from '@labyrinth/shared';
 
+const RES_LABELS: Record<string, string> = {
+  gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🏺',
+};
+
 export function ProfileScreen() {
-  const { username, resources, heroes, setScreen } = useGameStore();
+  const { username, resources, heroes, stats, setScreen } = useGameStore();
+
+  const totalRuns = stats.runsExtracted + stats.runsFailed;
+  const survival = totalRuns > 0 ? Math.round((stats.runsExtracted / totalRuns) * 100) : 0;
 
   return (
     <div style={s.page}>
@@ -16,6 +23,35 @@ export function ProfileScreen() {
         <div style={s.playerName}>{username || 'Adventurer'}</div>
         <div style={s.playerSub}>Labyrinth Explorer</div>
       </div>
+
+      <div style={s.sectionTitle}>Statistics</div>
+      <div style={s.statGrid}>
+        <StatCard icon="🏁" val={stats.runsStarted} label="Runs" />
+        <StatCard icon="🚪" val={stats.runsExtracted} label="Extractions" />
+        <StatCard icon="💀" val={stats.runsFailed} label="Deaths" />
+        <StatCard icon="📈" val={`${survival}%`} label="Survival" />
+        <StatCard icon="🗺️" val={stats.roomsExplored} label="Rooms" />
+        <StatCard icon="⬇️" val={stats.deepestDepth} label="Deepest" />
+        <StatCard icon="⚔️" val={stats.monstersSlain} label="Monsters" />
+        <StatCard icon="👹" val={stats.bossesSlain} label="Bosses" />
+        <StatCard icon="🔮" val={stats.abilitiesGained} label="Abilities" />
+      </div>
+
+      {Object.values(stats.lootExtracted).some((v) => (v ?? 0) > 0) && (
+        <>
+          <div style={s.sectionTitle}>Lifetime Loot Extracted</div>
+          <div style={s.lootRow}>
+            {(Object.entries(stats.lootExtracted) as [string, number][])
+              .filter(([, v]) => (v ?? 0) > 0)
+              .map(([k, v]) => (
+                <div key={k} style={s.lootChip}>
+                  <span>{RES_LABELS[k] ?? '•'}</span>
+                  <span style={s.lootVal}>{v}</span>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
 
       <div style={s.sectionTitle}>Resources</div>
       <div style={s.resourceGrid}>
@@ -68,6 +104,16 @@ export function ProfileScreen() {
   );
 }
 
+function StatCard({ icon, val, label }: { icon: string; val: number | string; label: string }) {
+  return (
+    <div style={s.statCard}>
+      <div style={s.statIconBig}>{icon}</div>
+      <div style={s.statValBig}>{val}</div>
+      <div style={s.statLabel}>{label}</div>
+    </div>
+  );
+}
+
 const s: Record<string, React.CSSProperties> = {
   page: { padding: 16, maxWidth: 480, margin: '0 auto' },
   header: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 },
@@ -77,6 +123,16 @@ const s: Record<string, React.CSSProperties> = {
   playerName: { fontSize: 18, fontWeight: 700, color: '#e0d0ff' },
   playerSub: { fontSize: 12, color: '#7a7a9a', marginTop: 4 },
   sectionTitle: { fontSize: 13, color: '#7a7a9a', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
+
+  statGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 20 },
+  statCard: { background: '#1a1a2e', border: '1px solid #2a2a40', borderRadius: 10, padding: '10px 4px', textAlign: 'center' },
+  statIconBig: { fontSize: 18, marginBottom: 2 },
+  statValBig: { fontSize: 18, fontWeight: 700, color: '#e0d0ff' },
+  statLabel: { fontSize: 10, color: '#7a7a9a', marginTop: 2 },
+
+  lootRow: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  lootChip: { display: 'flex', alignItems: 'center', gap: 6, background: '#1a1a2e', border: '1px solid #2a2a40', borderRadius: 8, padding: '6px 10px', fontSize: 14 },
+  lootVal: { fontWeight: 700, color: '#facc15' },
   resourceGrid: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 20 },
   resCard: { background: '#1a1a2e', border: '1px solid #2a2a40', borderRadius: 8, padding: '10px 4px', textAlign: 'center' },
   resVal: { fontSize: 16, fontWeight: 700, color: '#facc15' },

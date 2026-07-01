@@ -19,7 +19,7 @@ import type {
   ResourceType,
 } from '@labyrinth/shared';
 import type { SaveState, HeroSave, ExpeditionSave, CombatSave, MetaSave } from './state.js';
-import { SAVE_VERSION, metaOf } from './state.js';
+import { SAVE_VERSION, metaOf, createStats } from './state.js';
 import { generateRoom, generateStartRoom, runDepth } from './labyrinth.js';
 import { processCombatAction, applyUpdates, evaluateOutcome } from './combat.js';
 import { loadLocal, saveLocal, loadCloudMeta, saveCloudMeta } from './storage.js';
@@ -70,6 +70,11 @@ function migrateSave(raw: Record<string, any>): void {
   if (raw.version === 4) {
     raw.expedition = null;
     raw.version = 5;
+  }
+  // v5 → v6: introduce lifetime play statistics.
+  if (raw.version === 5) {
+    raw.stats = createStats();
+    raw.version = 6;
   }
 }
 
@@ -174,6 +179,7 @@ function createNewSave(): SaveState {
     resources: { gold: 200, stone: 100, iron: 50, essence: 5, relics: 0 },
     buildings,
     heroes,
+    stats: createStats(),
     expedition: null,
     combat: null,
   };
@@ -241,6 +247,9 @@ class GameEngine {
       this.save = createNewSave();
     }
 
+    // Defensive: ensure stats exist even if an older/partial save slipped through.
+    if (!this.save.stats) this.save.stats = createStats();
+
     this.ready = true;
     await this.persist();
   }
@@ -274,6 +283,7 @@ class GameEngine {
       resources: this.save.resources,
       heroes: this.save.heroes.map((h) => heroToDTO(h, forge)),
       buildings: this.save.buildings.map((b) => ({ ...b })),
+      stats: { ...this.save.stats, lootExtracted: { ...this.save.stats.lootExtracted } },
     };
   }
 
@@ -352,6 +362,7 @@ class GameEngine {
       pendingLoot: {},
     };
     this.save.combat = null;
+    this.save.stats.runsStarted += 1;
     await this.persist();
 
     return expeditionToDTO(this.save.expedition);
@@ -371,6 +382,23 @@ class GameEngine {
 
     await this.persist();
     return { expedition: expeditionToDTO(e), resource: pk.resource, amount: pk.amount };
+  }
+
+  // --- Stats (lightweight, fire-and-forget from the canvas game loop) ---
+
+  recordMonsterKill(): void {
+    this.save.stats.monstersSlain += 1;
+    void this.persist();
+  }
+
+  recordBossKill(): void {
+    this.save.stats.bossesSlain += 1;
+    void this.persist();
+  }
+
+  recordAbilityGained(): void {
+    this.save.stats.abilitiesGained += 1;
+    void this.persist();
   }
 
   /** Injects boss-drop pickups into the active expedition room so collectPickup handles them normally. */
@@ -398,6 +426,8 @@ class GameEngine {
     const nextDepth = e.depth + 1;
     e.depth = nextDepth;
     e.room = generateRoom(nextDepth, e.maxDepth, exit.leadsTo) as ExpeditionRoomDTO;
+    this.save.stats.roomsExplored += 1;
+    if (nextDepth > this.save.stats.deepestDepth) this.save.stats.deepestDepth = nextDepth;
     await this.persist();
     return { expedition: expeditionToDTO(e), extracted: false };
   }
@@ -502,6 +532,7 @@ class GameEngine {
     const reviveMs = REVIVE_TIME_MS * Math.max(0.2, 1 - (barracks - 1) * 0.2);
     const hero = this.save.heroes.find(h => h.id === e.heroId);
     if (hero) { hero.hp = 0; hero.isAlive = false; hero.reviveAt = Date.now() + reviveMs; }
+    this.save.stats.runsFailed += 1;
     this.save.expedition = null;
     this.save.combat = null;
     await this.persist();
@@ -530,7 +561,10 @@ class GameEngine {
     for (const [k, v] of Object.entries(loot)) {
       const key = k as ResourceType;
       this.save.resources[key] = Math.min((this.save.resources[key] ?? 0) + (v ?? 0), cap);
+      this.save.stats.lootExtracted[key] = (this.save.stats.lootExtracted[key] ?? 0) + (v ?? 0);
     }
+    this.save.stats.runsExtracted += 1;
+    if (e.depth > this.save.stats.deepestDepth) this.save.stats.deepestDepth = e.depth;
 
     // Completing the run grants the hero XP scaled by how deep they went.
     const hero = this.save.heroes.find((h) => h.id === e.heroId);

@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { engine } from '../game/engine.js';
+import { createStats } from '../game/state.js';
+import type { RunStatsSave } from '../game/state.js';
 import type {
   ResourceMap,
   HeroDTO,
@@ -28,6 +30,7 @@ interface GameState {
   resources: ResourceMap;
   heroes: HeroDTO[];
   buildings: BuildingDTO[];
+  stats: RunStatsSave;
 
   // Active game state
   expedition: ExpeditionDTO | null;
@@ -62,6 +65,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   resources: { gold: 0, stone: 0, iron: 0, essence: 0, relics: 0 },
   heroes: [],
   buildings: [],
+  stats: createStats(),
 
   expedition: null,
   combat: null,
@@ -84,6 +88,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         resources: state.resources,
         heroes: state.heroes,
         buildings: state.buildings,
+        stats: state.stats,
         screen: 'start',
       });
     } catch (e) {
@@ -95,7 +100,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   refreshPlayerState: () => {
     const state = engine.getState();
-    set({ resources: state.resources, heroes: state.heroes, buildings: state.buildings });
+    set({ resources: state.resources, heroes: state.heroes, buildings: state.buildings, stats: state.stats });
   },
 
   newGame: async () => {
@@ -110,6 +115,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         resources: state.resources,
         heroes: state.heroes,
         buildings: state.buildings,
+        stats: state.stats,
         screen: 'base',
       });
     } catch (e) {

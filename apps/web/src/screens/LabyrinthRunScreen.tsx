@@ -357,6 +357,7 @@ export function LabyrinthRunScreen() {
           if (killed) {
             m.dead = true;
             m.deadAt = performance.now();
+            engine.recordMonsterKill();
             if (skillAbs.has('bloodlust')) heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + 10);
           }
         }
@@ -378,6 +379,7 @@ export function LabyrinthRunScreen() {
           if (boss.hp <= 0) {
             boss.dead = true;
             boss.deadAt = performance.now();
+            engine.recordBossKill();
             nearBossRef.current = false;
             shakeRef.current = 20;
             haptics.success();
@@ -441,6 +443,7 @@ export function LabyrinthRunScreen() {
   const pickAbility = useCallback((id: AbilityId) => {
     activeAbilitiesRef.current.add(id);
     setActiveAbilitiesState(prev => [...prev, id]);
+    engine.recordAbilityGained();
     if (id === 'fortitude') {
       heroMaxHpRef.current += 60;
       heroHpRef.current = Math.min(heroHpRef.current + 60, heroMaxHpRef.current);
@@ -1122,6 +1125,7 @@ export function LabyrinthRunScreen() {
               nearest.dead = true;
               nearest.deadAt = performance.now();
               nearEnemyRef.current = null;
+              engine.recordMonsterKill();
               // Bloodlust
               if (abs.has('bloodlust')) heroHpRef.current = Math.min(heroMaxHpRef.current, heroHpRef.current + 10);
             }
@@ -1146,6 +1150,7 @@ export function LabyrinthRunScreen() {
             if (bossRef.current.hp <= 0) {
               bossRef.current.dead = true;
               bossRef.current.deadAt = performance.now();
+              engine.recordBossKill();
               nearBossRef.current = false;
               shakeRef.current = 20;
               haptics.success();
@@ -1195,7 +1200,7 @@ export function LabyrinthRunScreen() {
             if (abs.has('thorns')) {
               const thornDmg = Math.round(m.attack * 0.25);
               m.hp = Math.max(0, m.hp - thornDmg);
-              if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); }
+              if (m.hp <= 0) { m.dead = true; m.deadAt = performance.now(); engine.recordMonsterKill(); }
             }
             spawnParticlesFnRef.current(p.x, p.y, '239,68,68', finalDmg);
             shakeRef.current = Math.max(shakeRef.current, 8);

@@ -9,7 +9,7 @@ import type {
   CombatStatus,
 } from '@labyrinth/shared';
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /** A hero as persisted. Display stats are derived from class + level. */
 export interface HeroSave {
@@ -46,6 +46,34 @@ export interface CombatSave {
   turnQueue: string[];
 }
 
+/** Lifetime play statistics shown on the Profile screen. */
+export interface RunStatsSave {
+  runsStarted: number;
+  runsExtracted: number;
+  runsFailed: number;
+  roomsExplored: number;
+  monstersSlain: number;
+  bossesSlain: number;
+  abilitiesGained: number;
+  deepestDepth: number;
+  /** Total resources ever secured via extraction. */
+  lootExtracted: Partial<ResourceMap>;
+}
+
+export function createStats(): RunStatsSave {
+  return {
+    runsStarted: 0,
+    runsExtracted: 0,
+    runsFailed: 0,
+    roomsExplored: 0,
+    monstersSlain: 0,
+    bossesSlain: 0,
+    abilitiesGained: 0,
+    deepestDepth: 0,
+    lootExtracted: {},
+  };
+}
+
 /** Permanent progress synced to Telegram CloudStorage across devices. */
 export interface MetaSave {
   version: number;
@@ -54,6 +82,7 @@ export interface MetaSave {
   resources: ResourceMap;
   buildings: BuildingDTO[];
   heroes: HeroSave[];
+  stats: RunStatsSave;
 }
 
 /** Full local state (meta + in-progress run) kept in localStorage. */
@@ -70,5 +99,6 @@ export function metaOf(state: SaveState): MetaSave {
     resources: state.resources,
     buildings: state.buildings,
     heroes: state.heroes,
+    stats: state.stats,
   };
 }
