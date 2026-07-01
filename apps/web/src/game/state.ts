@@ -58,6 +58,8 @@ export interface RunStatsSave {
   deepestDepth: number;
   /** Total resources ever secured via extraction. */
   lootExtracted: Partial<ResourceMap>;
+  /** Ids of achievements the player has already been shown as unlocked. */
+  seenAchievements: string[];
 }
 
 export function createStats(): RunStatsSave {
@@ -71,6 +73,7 @@ export function createStats(): RunStatsSave {
     abilitiesGained: 0,
     deepestDepth: 0,
     lootExtracted: {},
+    seenAchievements: [],
   };
 }
 

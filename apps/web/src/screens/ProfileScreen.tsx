@@ -1,4 +1,7 @@
 import { useGameStore } from '../store/gameStore.js';
+import { ACHIEVEMENTS, isUnlocked } from '../game/achievements.js';
+import type { Achievement } from '../game/achievements.js';
+import type { RunStatsSave } from '../game/state.js';
 import { HERO_TEMPLATES } from '@labyrinth/shared';
 import type { HeroClass } from '@labyrinth/shared';
 
@@ -53,6 +56,15 @@ export function ProfileScreen() {
         </>
       )}
 
+      <div style={s.sectionTitle}>
+        Achievements ({ACHIEVEMENTS.filter((a) => isUnlocked(a, stats)).length}/{ACHIEVEMENTS.length})
+      </div>
+      <div style={s.achGrid}>
+        {ACHIEVEMENTS.map((a) => (
+          <AchievementCard key={a.id} ach={a} stats={stats} />
+        ))}
+      </div>
+
       <div style={s.sectionTitle}>Resources</div>
       <div style={s.resourceGrid}>
         {(Object.entries(resources) as [string, number][]).map(([k, v]) => (
@@ -104,6 +116,29 @@ export function ProfileScreen() {
   );
 }
 
+function AchievementCard({ ach, stats }: { ach: Achievement; stats: RunStatsSave }) {
+  const cur = Math.min(ach.progress(stats), ach.goal);
+  const unlocked = cur >= ach.goal;
+  const pct = Math.round((cur / ach.goal) * 100);
+  return (
+    <div style={{ ...s.achCard, opacity: unlocked ? 1 : 0.72, borderColor: unlocked ? '#7c3aed' : '#2a2a40' }}>
+      <div style={{ ...s.achIcon, filter: unlocked ? 'none' : 'grayscale(1)' }}>{ach.icon}</div>
+      <div style={s.achBody}>
+        <div style={s.achName}>{ach.name} {unlocked && <span style={s.achCheck}>✓</span>}</div>
+        <div style={s.achDesc}>{ach.desc}</div>
+        {!unlocked && (
+          <>
+            <div style={s.achBarBg}>
+              <div style={{ ...s.achBarFill, width: `${pct}%` }} />
+            </div>
+            <div style={s.achProg}>{cur}/{ach.goal}</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ icon, val, label }: { icon: string; val: number | string; label: string }) {
   return (
     <div style={s.statCard}>
@@ -133,6 +168,17 @@ const s: Record<string, React.CSSProperties> = {
   lootRow: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
   lootChip: { display: 'flex', alignItems: 'center', gap: 6, background: '#1a1a2e', border: '1px solid #2a2a40', borderRadius: 8, padding: '6px 10px', fontSize: 14 },
   lootVal: { fontWeight: 700, color: '#facc15' },
+
+  achGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 20 },
+  achCard: { display: 'flex', gap: 8, background: '#1a1a2e', border: '1px solid', borderRadius: 10, padding: 10, transition: 'opacity 0.2s' },
+  achIcon: { fontSize: 22, lineHeight: 1 },
+  achBody: { flex: 1, minWidth: 0 },
+  achName: { fontSize: 12, fontWeight: 700, color: '#e0d0ff' },
+  achCheck: { color: '#4ade80' },
+  achDesc: { fontSize: 10, color: '#8888aa', marginTop: 1, marginBottom: 4 },
+  achBarBg: { height: 4, background: '#2a2a40', borderRadius: 2, overflow: 'hidden' },
+  achBarFill: { height: 4, background: 'linear-gradient(90deg, #5b3a9c, #8b5cf6)', borderRadius: 2 },
+  achProg: { fontSize: 9, color: '#7a7a9a', marginTop: 2, textAlign: 'right' },
   resourceGrid: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 20 },
   resCard: { background: '#1a1a2e', border: '1px solid #2a2a40', borderRadius: 8, padding: '10px 4px', textAlign: 'center' },
   resVal: { fontSize: 16, fontWeight: 700, color: '#facc15' },

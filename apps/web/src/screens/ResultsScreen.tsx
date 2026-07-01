@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import { useGameStore } from '../store/gameStore.js';
 import { haptics } from '../game/haptics.js';
+import { ACHIEVEMENTS } from '../game/achievements.js';
 
 const RES_ICON: Record<string, string> = {
-  gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🔮',
+  gold: '🪙', stone: '🪨', iron: '⚙️', essence: '✨', relics: '🏺',
 };
 
 export function ResultsScreen() {
@@ -12,6 +13,7 @@ export function ResultsScreen() {
   const success = lastResult?.success ?? false;
   const loot = lastResult?.loot ?? {};
   const lootEntries = (Object.entries(loot) as [string, number][]).filter(([, v]) => v > 0);
+  const newAchievements = ACHIEVEMENTS.filter((a) => lastResult?.newAchievements?.includes(a.id));
 
   useEffect(() => {
     if (success) haptics.success(); else haptics.error();
@@ -30,6 +32,18 @@ export function ResultsScreen() {
           </h1>
           <p style={{ ...s.msg, color: '#c0a0a0' }}>{lastResult?.message ?? 'Your hero fell in the labyrinth.'}</p>
           <p style={{ ...s.sub, color: '#6a4040' }}>All loot collected this run has been lost.</p>
+
+          {newAchievements.length > 0 && (
+            <div style={s.lootBox}>
+              <div style={{ ...s.boxTitle, color: '#facc15', borderColor: '#7c5a10' }}>🏅 Achievement Unlocked</div>
+              {newAchievements.map((a) => (
+                <div key={a.id} style={s.achRow}>
+                  <span style={s.achRowIcon}>{a.icon}</span>
+                  <span style={s.achRowName}>{a.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <button style={{ ...s.btn, background: '#3b1a1a', border: '1px solid #7f1d1d', color: '#fca5a5' }}
@@ -58,6 +72,18 @@ export function ResultsScreen() {
               <div key={k} style={s.row}>
                 <span style={s.rowKey}>{RES_ICON[k] ?? '•'} {k}</span>
                 <span style={{ color: '#4ade80', fontWeight: 700 }}>+{v}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {newAchievements.length > 0 && (
+          <div style={s.lootBox}>
+            <div style={{ ...s.boxTitle, color: '#facc15', borderColor: '#7c5a10' }}>🏅 Achievement Unlocked</div>
+            {newAchievements.map((a) => (
+              <div key={a.id} style={s.achRow}>
+                <span style={s.achRowIcon}>{a.icon}</span>
+                <span style={s.achRowName}>{a.name}</span>
               </div>
             ))}
           </div>
@@ -159,6 +185,14 @@ const s: Record<string, React.CSSProperties> = {
     color: '#7a8a80',
     textTransform: 'capitalize' as const,
   },
+  achRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '5px 0',
+  },
+  achRowIcon: { fontSize: 20, lineHeight: 1 },
+  achRowName: { fontSize: 13, fontWeight: 700, color: '#f5e6b0' },
   btn: {
     position: 'relative',
     zIndex: 1,

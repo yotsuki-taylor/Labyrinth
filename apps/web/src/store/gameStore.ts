@@ -35,7 +35,7 @@ interface GameState {
   // Active game state
   expedition: ExpeditionDTO | null;
   combat: CombatDTO | null;
-  lastResult: { success: boolean; loot: Partial<ResourceMap>; message: string } | null;
+  lastResult: { success: boolean; loot: Partial<ResourceMap>; message: string; newAchievements: string[] } | null;
 
   // Loading / errors
   loading: boolean;
@@ -170,11 +170,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   heroDefeated: async () => {
     try {
       const result = await engine.heroDefeated();
+      const newAchievements = engine.claimNewAchievements();
       get().refreshPlayerState();
       set({
         expedition: null,
         screen: 'results',
-        lastResult: { success: false, loot: result.lootGained, message: result.message },
+        lastResult: { success: false, loot: result.lootGained, message: result.message, newAchievements },
       });
     } catch (e) {
       set({ error: (e as Error).message });
@@ -188,11 +189,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     try {
       const result = await engine.enterExit(exitId);
       if (result.extracted && result.extract) {
+        const newAchievements = engine.claimNewAchievements();
         get().refreshPlayerState();
         set({
           expedition: null,
           screen: 'results',
-          lastResult: { success: result.extract.success, loot: result.extract.lootGained, message: result.extract.message },
+          lastResult: { success: result.extract.success, loot: result.extract.lootGained, message: result.extract.message, newAchievements },
         });
       } else {
         set({ expedition: result.expedition });
@@ -217,12 +219,13 @@ export const useGameStore = create<GameState>((set, get) => ({
         const state = engine.getState();
         set({ expedition, screen: 'labyrinth_run', combat: null, heroes: state.heroes, resources: state.resources });
       } else if (result.combat.status === 'defeat') {
+        const newAchievements = engine.claimNewAchievements();
         get().refreshPlayerState();
         set({
           screen: 'results',
           combat: null,
           expedition: null,
-          lastResult: { success: false, loot: {}, message: 'Your hero fell in the labyrinth. All loot lost.' },
+          lastResult: { success: false, loot: {}, message: 'Your hero fell in the labyrinth. All loot lost.', newAchievements },
         });
       }
     } catch (e) {

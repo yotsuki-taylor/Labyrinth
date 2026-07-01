@@ -21,6 +21,7 @@ import type {
 import type { SaveState, HeroSave, ExpeditionSave, CombatSave, MetaSave } from './state.js';
 import { SAVE_VERSION, metaOf, createStats } from './state.js';
 import { generateRoom, generateStartRoom, runDepth } from './labyrinth.js';
+import { unlockedIds } from './achievements.js';
 import { processCombatAction, applyUpdates, evaluateOutcome } from './combat.js';
 import { loadLocal, saveLocal, loadCloudMeta, saveCloudMeta } from './storage.js';
 
@@ -249,6 +250,11 @@ class GameEngine {
 
     // Defensive: ensure stats exist even if an older/partial save slipped through.
     if (!this.save.stats) this.save.stats = createStats();
+    // Existing players start with their already-earned achievements marked seen,
+    // so the update doesn't flood them with retroactive unlock popups.
+    if (!this.save.stats.seenAchievements) {
+      this.save.stats.seenAchievements = unlockedIds(this.save.stats);
+    }
 
     this.ready = true;
     await this.persist();
@@ -399,6 +405,21 @@ class GameEngine {
   recordAbilityGained(): void {
     this.save.stats.abilitiesGained += 1;
     void this.persist();
+  }
+
+  /**
+   * Returns achievement ids unlocked since the last claim and marks them seen.
+   * Called when showing the results screen so freshly-earned achievements can
+   * be celebrated exactly once.
+   */
+  claimNewAchievements(): string[] {
+    const seen = new Set(this.save.stats.seenAchievements);
+    const fresh = unlockedIds(this.save.stats).filter((id) => !seen.has(id));
+    if (fresh.length > 0) {
+      this.save.stats.seenAchievements = [...seen, ...fresh];
+      void this.persist();
+    }
+    return fresh;
   }
 
   /** Injects boss-drop pickups into the active expedition room so collectPickup handles them normally. */
